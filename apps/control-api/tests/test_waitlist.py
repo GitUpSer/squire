@@ -22,8 +22,9 @@ def _fresh_rate_limiter():
 def _signup(**overrides) -> dict:
     payload = {
         "email": "Ada@Example.com",
-        "features": ["whatsapp", "daily_briefings"],
+        "features": ["whatsapp", "github_dev"],
         "use_case": "book my travel and triage my inbox",
+        "integrations": "Notion and my bank",
         "utm_source": "reddit",
         "utm_medium": "cpc",
         "utm_campaign": "byo-subscription",
@@ -44,8 +45,9 @@ def test_signup_persists_normalised_email_features_and_utms(client, session):
 
     (row,) = _rows(session)
     assert row.email == "ada@example.com"  # lowercased
-    assert json.loads(row.features) == ["daily_briefings", "whatsapp"]  # sorted set
+    assert json.loads(row.features) == ["github_dev", "whatsapp"]  # sorted set
     assert row.use_case == "book my travel and triage my inbox"
+    assert row.integrations == "Notion and my bank"
     assert (row.utm_source, row.utm_medium, row.utm_campaign) == ("reddit", "cpc", "byo-subscription")
     assert row.confirmed_at is not None  # v1 auto-confirms (no Resend flow yet)
     assert row.confirm_token is None
@@ -58,11 +60,11 @@ def test_signup_requires_no_auth(client):
 
 def test_repeat_email_upserts_instead_of_erroring(client, session):
     client.post("/waitlist", json=_signup())
-    resp = client.post("/waitlist", json=_signup(features=["telegram"], utm_source="google"))
+    resp = client.post("/waitlist", json=_signup(features=["voice_notes"], utm_source="google"))
     assert resp.status_code == 200
 
     (row,) = _rows(session)  # still one row
-    assert json.loads(row.features) == ["telegram"]
+    assert json.loads(row.features) == ["voice_notes"]
     assert row.utm_source == "google"
 
 
@@ -101,6 +103,16 @@ def test_unexpected_field_is_rejected(client):
 
 def test_use_case_over_cap_is_rejected(client):
     assert client.post("/waitlist", json=_signup(use_case="x" * 501)).status_code == 422
+
+
+def test_removed_feature_slug_is_rejected(client):
+    # Slugs for things we build regardless were pruned from the closed set
+    # (2026-08-22); the API must reject them so page and schema stay in sync.
+    assert client.post("/waitlist", json=_signup(features=["telegram"])).status_code == 422
+
+
+def test_integrations_over_cap_is_rejected(client):
+    assert client.post("/waitlist", json=_signup(integrations="x" * 301)).status_code == 422
 
 
 def test_rate_limit_window_slides(monkeypatch):

@@ -318,11 +318,13 @@ class RedeployResponse(BaseModel):
 #: The closed feature-interest set. The landing-page checkboxes and this tuple
 #: must stay in sync (apps/web/site/index.html); the Literal below is what makes
 #: `waitlist.features` structurally unable to hold free-form text.
+#:
+#: Deliberately excludes anything we are building regardless (Telegram channel,
+#: briefings, email/calendar) — a checkbox only earns its place if the answer
+#: changes a decision: WhatsApp timing, dev-audience sizing, voice priority,
+#: BYO-subscription connect-flow weight, privacy messaging emphasis.
 WAITLIST_FEATURES = (
     "whatsapp",
-    "telegram",
-    "daily_briefings",
-    "email_calendar",
     "github_dev",
     "voice_notes",
     "byo_subscription",
@@ -331,9 +333,6 @@ WAITLIST_FEATURES = (
 
 WaitlistFeature = Literal[
     "whatsapp",
-    "telegram",
-    "daily_briefings",
-    "email_calendar",
     "github_dev",
     "voice_notes",
     "byo_subscription",
@@ -357,6 +356,9 @@ class WaitlistRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     features: list[WaitlistFeature] = Field(default_factory=list, max_length=len(WAITLIST_FEATURES))
     use_case: str | None = Field(default=None, max_length=500)
+    # Free-text "which integrations would you want?" -- drives the build order
+    # of the connections roadmap (the landing page promises exactly that).
+    integrations: str | None = Field(default=None, max_length=300)
 
     utm_source: str | None = Field(default=None, max_length=100)
     utm_medium: str | None = Field(default=None, max_length=100)

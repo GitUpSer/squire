@@ -263,6 +263,9 @@ class Waitlist(SQLModel, table=True):
     # column (not sa JSON) keeps SQLite tests and Postgres identical.
     features: str = "[]"
     use_case: str | None = None
+    # Second bounded free-text field (<=300 chars, schemas.WaitlistRequest):
+    # "which integrations would you want?" -- the integration roadmap vote.
+    integrations: str | None = None
 
     # Ad attribution, straight from the landing page's hidden fields. This is
     # what makes the $200 ad experiments measurable: signups-per-source is a

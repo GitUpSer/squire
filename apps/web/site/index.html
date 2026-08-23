@@ -277,20 +277,22 @@ form .btn[disabled]{opacity:.55;cursor:default}
       <!-- `value` slugs are an interface contract with control-api
            (schemas.WAITLIST_FEATURES) — change both together. -->
       <div class="checks">
-        <label><input type="checkbox" name="features" value="whatsapp"> On WhatsApp</label>
-        <label><input type="checkbox" name="features" value="telegram"> On Telegram</label>
-        <label><input type="checkbox" name="features" value="daily_briefings"> Morning briefings &amp; reminders</label>
-        <label><input type="checkbox" name="features" value="email_calendar"> Help with email &amp; calendar</label>
+        <label><input type="checkbox" name="features" value="whatsapp"> I'd want it on WhatsApp</label>
         <label><input type="checkbox" name="features" value="github_dev"> GitHub &amp; developer chores</label>
         <label><input type="checkbox" name="features" value="voice_notes"> Talking to it with voice notes</label>
         <label><input type="checkbox" name="features" value="byo_subscription"> Running on my ChatGPT / Claude plan</label>
-        <label><input type="checkbox" name="features" value="privacy_isolation"> Knowing my data stays private</label>
+        <label><input type="checkbox" name="features" value="privacy_isolation"> Privacy is a dealbreaker for me</label>
       </div>
     </div>
 
     <div class="field">
-      <label class="top" for="use_case">What would you hand it first? <span style="color:var(--parchment-dim);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-      <textarea id="use_case" name="use_case" maxlength="500" placeholder="e.g. keep track of my kids' school schedule — or tell us which app you'd want it to connect to"></textarea>
+      <label class="top" for="use_case">What would you want your assistant to do? <span style="color:var(--parchment-dim);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+      <textarea id="use_case" name="use_case" maxlength="500" placeholder="e.g. keep track of my kids' school schedule and remind me the night before"></textarea>
+    </div>
+
+    <div class="field">
+      <label class="top" for="integrations">Which integrations would you want? <span style="color:var(--parchment-dim);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+      <textarea id="integrations" name="integrations" maxlength="300" style="min-height:52px" placeholder="e.g. Notion, Spotify, my bank, Home Assistant…"></textarea>
     </div>
 
     <!-- Honeypot: humans never see it; bots that fill it are silently dropped. -->
@@ -348,6 +350,7 @@ form .btn[disabled]{opacity:.55;cursor:default}
       email: form.email.value.trim(),
       features: Array.from(form.querySelectorAll('input[name="features"]:checked')).map(function (c) { return c.value; }),
       use_case: form.use_case.value.trim() || null,
+      integrations: form.integrations.value.trim() || null,
       utm_source: sessionStorage.getItem("utm_source"),
       utm_medium: sessionStorage.getItem("utm_medium"),
       utm_campaign: sessionStorage.getItem("utm_campaign"),

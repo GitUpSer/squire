@@ -112,6 +112,7 @@ def join_waitlist(
         )
     row.features = features_json
     row.use_case = payload.use_case
+    row.integrations = payload.integrations
     row.utm_source = payload.utm_source
     row.utm_medium = payload.utm_medium
     row.utm_campaign = payload.utm_campaign

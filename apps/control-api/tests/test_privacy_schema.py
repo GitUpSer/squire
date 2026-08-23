@@ -160,6 +160,9 @@ EXPECTED_COLUMNS = {
         "email",
         "features",
         "use_case",
+        # Same justification as use_case: a <=300-char marketing survey answer
+        # ("which integrations would you want?") typed on the public site.
+        "integrations",
         "utm_source",
         "utm_medium",
         "utm_campaign",
