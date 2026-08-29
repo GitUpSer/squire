@@ -6,6 +6,80 @@
 <title>Squire — two minutes from now, you're texting your new assistant</title>
 <meta name="description" content="Sign up, get a hello from your assistant, and start handing things over — reminders, bookings, follow-ups — as easily as texting a friend. Join the waitlist.">
 <link rel="stylesheet" href="/styles.css">
+<link rel="canonical" href="https://thesquire.co/">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="theme-color" content="#f4eedb">
+<!-- Social share cards (iMessage/Slack/X/LinkedIn all read these). The
+     image is generated from the brand assets — see git history for the
+     PIL script; regenerate if the headline changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Squire">
+<meta property="og:url" content="https://thesquire.co/">
+<meta property="og:title" content="Squire — the AI personal assistant in your texts">
+<meta property="og:description" content="Remembers, reminds, books, and follows up — over Telegram or WhatsApp, no app to install. Free trial at launch. Join the waitlist.">
+<meta property="og:image" content="https://thesquire.co/assets/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Squire — two minutes from now, you're texting your new assistant.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Squire — the AI personal assistant in your texts">
+<meta name="twitter:description" content="Remembers, reminds, books, and follows up — over Telegram or WhatsApp, no app to install. Join the waitlist.">
+<meta name="twitter:image" content="https://thesquire.co/assets/og-card.png">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<!-- Structured data for Google rich results + AI answer engines. Keep the
+     FAQ entries in sync with the visible #faq section below (Google requires
+     the JSON-LD Q&A to match on-page text). -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://thesquire.co/#org",
+      "name": "Squire",
+      "url": "https://thesquire.co/",
+      "logo": "https://thesquire.co/assets/logo-mark-ink.png",
+      "description": "Squire is an AI personal assistant you text on Telegram or WhatsApp. It remembers, reminds, books, handles email and calendar, and asks before it acts."
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://thesquire.co/#app",
+      "name": "Squire",
+      "url": "https://thesquire.co/",
+      "applicationCategory": "ProductivityApplication",
+      "operatingSystem": "Telegram, WhatsApp",
+      "description": "An AI personal assistant that lives in your text messages. Persistent memory, reminders, email triage, calendar management, online research, and integrations with Gmail, Google Calendar, GitHub, Notion, Slack and more. Runs on your existing ChatGPT or Claude subscription.",
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free trial at launch", "availability": "https://schema.org/PreOrder"},
+      "publisher": {"@id": "https://thesquire.co/#org"}
+    },
+    {
+      "@type": "WebSite",
+      "url": "https://thesquire.co/",
+      "name": "Squire",
+      "publisher": {"@id": "https://thesquire.co/#org"}
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {"@type": "Question", "name": "What is Squire?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Squire is an AI personal assistant you talk to over text messages. It remembers your people, dates and preferences, sets reminders, triages your email, manages your calendar, researches things online, and follows up on standing tasks — and it asks before doing anything consequential. There is no app to install; it is a new contact in Telegram (WhatsApp soon after)."}},
+        {"@type": "Question", "name": "How is Squire different from ChatGPT or Claude?",
+         "acceptedAnswer": {"@type": "Answer", "text": "ChatGPT or Claude is the brain — Squire runs on the AI plan you already pay for. Squire adds what a chat window lacks: long-term memory across conversations, scheduled and recurring tasks, integrations with your email, calendar and tools, and a private environment of its own per user, all reachable from your messaging app."}},
+        {"@type": "Question", "name": "Which messaging apps does Squire work on?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Telegram at launch, with WhatsApp following shortly after. You never install anything — your assistant messages you first."}},
+        {"@type": "Question", "name": "What can Squire connect to?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon, with more being added. Connecting anything is optional and done on your say-so."}},
+        {"@type": "Question", "name": "Is Squire private?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Each Squire runs in its own sealed environment with its own keys, and your conversations live only there. The service is built with nowhere central to store your messages — no master inbox and no admin view — and automated checks on every change fail the moment anything could leak."}},
+        {"@type": "Question", "name": "How much does Squire cost?",
+         "acceptedAnswer": {"@type": "Answer", "text": "There is a free trial at launch. Pricing will be announced when Squire launches; waitlist members hear first."}}
+      ]
+    }
+  ]
+}
+</script>
 <style>
 /* Page styles from the claude.ai/design pages/landing.html (parchment
    page, dark-green accents), adapted for production: responsive below
@@ -120,6 +194,16 @@ footer a{color:var(--parchment-dim)}
 .cartouche .motto{margin-top:8px;letter-spacing:.26em}
 .cartouche .links{margin-top:12px}
 
+/* FAQ — plain-language answers for humans, search engines, and AI answer
+   engines alike. Mirrors the FAQPage JSON-LD in <head>; edit both together. */
+.faq{max-width:720px;margin:36px auto 0;text-align:left;border-top:1px solid var(--hairline-dark)}
+.faq details{border-bottom:1px solid var(--hairline-dark);padding:18px 0}
+.faq summary{cursor:pointer;font:400 1.2rem var(--display);color:var(--ink);list-style:none;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";color:var(--green);font:400 1.3rem var(--display);flex:none}
+.faq details[open] summary::after{content:"\2013"}
+.faq p{color:var(--muted);line-height:1.7;margin:12px 0 0;font-size:.97rem}
+
 @media (max-width:1080px){
   .wrap{padding:0 24px}
   .hero{padding-top:56px}
@@ -233,6 +317,38 @@ footer a{color:var(--parchment-dim)}
     </div>
   </section>
 
+  <section id="faq">
+    <div class="kick">Questions</div>
+    <h2>The short version.</h2>
+    <!-- Answers here are the on-page copy of the FAQPage JSON-LD in <head>;
+         Google requires them to match, so change both together. -->
+    <div class="faq">
+      <details>
+        <summary>What is Squire?</summary>
+        <p>Squire is an AI personal assistant you talk to over text messages. It remembers your people, dates and preferences, sets reminders, triages your email, manages your calendar, researches things online, and follows up on standing tasks — and it asks before doing anything consequential. There is no app to install; it is a new contact in Telegram (WhatsApp soon after).</p>
+      </details>
+      <details>
+        <summary>How is Squire different from ChatGPT or Claude?</summary>
+        <p>ChatGPT or Claude is the brain — Squire runs on the AI plan you already pay for. Squire adds what a chat window lacks: long-term memory across conversations, scheduled and recurring tasks, integrations with your email, calendar and tools, and a private environment of its own per user, all reachable from your messaging app.</p>
+      </details>
+      <details>
+        <summary>Which messaging apps does Squire work on?</summary>
+        <p>Telegram at launch, with WhatsApp following shortly after. You never install anything — your assistant messages you first.</p>
+      </details>
+      <details>
+        <summary>What can Squire connect to?</summary>
+        <p>Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon, with more being added. Connecting anything is optional and done on your say-so.</p>
+      </details>
+      <details>
+        <summary>Is Squire private?</summary>
+        <p>Each Squire runs in its own sealed environment with its own keys, and your conversations live only there. The service is built with nowhere central to store your messages — no master inbox and no admin view — and automated checks on every change fail the moment anything could leak.</p>
+      </details>
+      <details>
+        <summary>How much does Squire cost?</summary>
+        <p>There is a free trial at launch. Pricing will be announced when Squire launches; waitlist members hear first.</p>
+      </details>
+    </div>
+  </section>
   <section id="join">
     <div class="kick">Early access</div>
     <h2>Be first in line</h2>
