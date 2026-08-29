@@ -1,10 +1,10 @@
 # Squire
 
-> Squire is an AI personal assistant you talk to over text messages (Telegram at launch, WhatsApp next). It remembers your people and dates, sets reminders, triages email, manages your calendar, does online research, and asks before acting on anything consequential. No app to install — it's just a new contact in your messaging app. Pre-launch; join the waitlist at https://thesquire.co.
+> Squire is an AI personal assistant you talk to over text messages (WhatsApp or Telegram). It remembers what you tell it, sets reminders, triages email, manages your calendar, does online research, and asks before acting on anything consequential. No app to install — it's just a new contact in your messaging app. Pre-launch; join the waitlist at https://thesquire.co.
 
 ## Key facts
 
-- Product: AI personal assistant delivered through messaging (Telegram first, WhatsApp soon after). Not a separate app.
+- Product: AI personal assistant delivered through messaging (WhatsApp and Telegram, both at launch). Not a separate app.
 - Runs on the AI subscription you already pay for (ChatGPT or Claude); Squire supplies the memory, tools, scheduling, and integrations around it.
 - Capabilities: long-term memory, one-off and recurring reminders, email triage and drafting, calendar booking/rescheduling, web research and price watching, scheduled morning briefings, GitHub issue/PR tracking.
 - Integrations (at or shortly after launch): Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable, Amazon.
