@@ -1,0 +1,31 @@
+# thesquire.co — everything is public; nothing to hide from crawlers.
+# AI-search crawlers are named explicitly so it's clear they're welcome
+# (absence would also mean allow, but explicit beats implicit here).
+User-agent: *
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: Bingbot
+Allow: /
+
+# /api/* is the waitlist POST endpoint (see Caddyfile) — not a page.
+Disallow: /api/
+
+Sitemap: https://thesquire.co/sitemap.xml
