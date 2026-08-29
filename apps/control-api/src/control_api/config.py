@@ -106,6 +106,26 @@ class Settings(BaseSettings):
     # Decision + wake-path evidence: G1 measurement session, 2026-08-19/20.
     tenant_unbound_awake_hours: float = 1.0
 
+    # -- Cloud embeddings (Gate G1 lever, measured 2026-08-19) ---------------
+    # When set, every provisioned tenant is handed HINDSIGHT_API_EMBEDDINGS_*
+    # vars pointing Hindsight at OpenAI's embeddings API instead of loading the
+    # local sentence-transformers model. Measured effect: hindsight-api process
+    # RSS 792MB (local) -> 511MB (cloud), ~280MB off every awake tenant.
+    #
+    # This must be a DEDICATED, Squire-owned key -- ideally an OpenAI project
+    # key restricted to the /v1/embeddings endpoint, since it lives inside
+    # user-controlled tenant containers. It is deliberately NOT the trial key
+    # (Anthropic -- no embeddings API) and survives conversion (the trial key
+    # is revoked on connect; memory embedding must not die with it).
+    # Empty (the default) = lever off, tenants keep the local model.
+    tenant_embeddings_openai_api_key: str = ""
+    # Pinned to bge-small's dimension so the lever is safe on tenants with
+    # existing memories: hindsight refuses to boot on a dimension change over a
+    # non-empty vector table, and text-embedding-3-small supports matryoshka
+    # truncation to 384. Note old vectors stay in bge's space -- recall quality
+    # on pre-switch memories degrades gracefully rather than erroring.
+    tenant_embeddings_openai_dimensions: int = 384
+
     # -- Ingress ------------------------------------------------------------
     # Telegram webhooks are registered as `<ingress_public_url>/telegram/<bot_id>`.
     ingress_public_url: str = "http://localhost:8081"

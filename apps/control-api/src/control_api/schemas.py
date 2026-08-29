@@ -319,24 +319,30 @@ class RedeployResponse(BaseModel):
 #: must stay in sync (apps/web/site/index.html); the Literal below is what makes
 #: `waitlist.features` structurally unable to hold free-form text.
 #:
-#: Deliberately excludes anything we are building regardless (Telegram channel,
-#: briefings, email/calendar) — a checkbox only earns its place if the answer
-#: changes a decision: WhatsApp timing, dev-audience sizing, voice priority,
-#: BYO-subscription connect-flow weight, privacy messaging emphasis.
+#: 2026-08-26 founder revision: the set now doubles as a demand ranking across
+#: capabilities (calendar/email are confirmed builds but their checked-rate
+#: orders the launch pitch), plus genuine go/no-go signals (WhatsApp timing,
+#: dev-audience sizing, voice priority, reservations/flights/finances scope).
 WAITLIST_FEATURES = (
     "whatsapp",
     "github_dev",
     "voice_notes",
-    "byo_subscription",
-    "privacy_isolation",
+    "calendar",
+    "email_mgmt",
+    "reservations",
+    "flights",
+    "finances",
 )
 
 WaitlistFeature = Literal[
     "whatsapp",
     "github_dev",
     "voice_notes",
-    "byo_subscription",
-    "privacy_isolation",
+    "calendar",
+    "email_mgmt",
+    "reservations",
+    "flights",
+    "finances",
 ]
 
 # Deliberately conservative: we would rather bounce an RFC-valid oddity than

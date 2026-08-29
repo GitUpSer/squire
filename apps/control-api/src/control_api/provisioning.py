@@ -598,6 +598,21 @@ def _step_set_variables(session: Session, tenant: Tenant, clients: ProvisionClie
             tenant.railway_service_id
         ) or "",
     }
+    # Gate G1 cloud-embedder lever: only when control-api actually holds a key.
+    # Conditional on purpose -- an empty HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY
+    # would make hindsight's factory raise at boot ("key is required when
+    # provider is 'openai'") and crashloop the memory daemon on every tenant.
+    # See config.py's tenant_embeddings_* comments for why this is a dedicated
+    # key and why dimensions are pinned to 384.
+    if settings.tenant_embeddings_openai_api_key:
+        variables["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] = "openai"
+        variables["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"] = (
+            settings.tenant_embeddings_openai_api_key
+        )
+        variables["HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS"] = str(
+            settings.tenant_embeddings_openai_dimensions
+        )
+
     # 32 random bytes, base64. Generated only if we have not already set one: a
     # retry must not rotate the key out from under a volume already encrypted with
     # it. We cannot read the old one back (we never stored it), so we simply omit

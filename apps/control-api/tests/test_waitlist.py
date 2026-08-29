@@ -106,9 +106,11 @@ def test_use_case_over_cap_is_rejected(client):
 
 
 def test_removed_feature_slug_is_rejected(client):
-    # Slugs for things we build regardless were pruned from the closed set
-    # (2026-08-22); the API must reject them so page and schema stay in sync.
-    assert client.post("/waitlist", json=_signup(features=["telegram"])).status_code == 422
+    # Retired slugs (telegram pruned 2026-08-22; byo_subscription and
+    # privacy_isolation replaced 2026-08-26) must 422 so page and schema
+    # stay in sync.
+    for slug in ("telegram", "byo_subscription", "privacy_isolation"):
+        assert client.post("/waitlist", json=_signup(features=[slug])).status_code == 422
 
 
 def test_integrations_over_cap_is_rejected(client):

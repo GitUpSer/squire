@@ -193,6 +193,53 @@ def test_tenant_env_vars_match_the_interface_contract(pool_bot, fake_railway):
 
 
 @respx.mock
+def test_cloud_embedder_vars_ride_along_only_when_the_key_is_configured(
+    pool_bot, fake_railway, monkeypatch
+):
+    """Gate G1's cloud-embedder lever (measured 2026-08-19): when control-api
+    holds a Squire-owned OpenAI key, every provisioned tenant gets Hindsight
+    pointed at the OpenAI embeddings API instead of loading the local
+    sentence-transformers model — worth ~280MB of awake RSS per tenant
+    (hindsight-api process: 792MB local vs 511MB cloud, measured live).
+
+    Two contract details this pins:
+      * The key must be a DEDICATED embeddings credential, never the tenant's
+        LLM key: trial tenants run Hindsight's LLM on an ANTHROPIC key
+        (Anthropic has no embeddings API), and hindsight's `openai` embeddings
+        provider would otherwise silently fall back to HINDSIGHT_API_LLM_API_KEY.
+      * Dimensions are pinned to 384 to match the local bge-small model:
+        hindsight hard-errors at boot on a dimension change over a non-empty
+        table, so 384 is what makes the lever safe to flip on tenants that
+        already hold memories.
+
+    The unconfigured case needs no test of its own:
+    test_tenant_env_vars_match_the_interface_contract asserts exact set
+    equality on the variable names, so an unconditional leak of these vars
+    would fail there.
+    """
+    from control_api import config
+
+    monkeypatch.setenv("TENANT_EMBEDDINGS_OPENAI_API_KEY", "sk-embeddings-only-test")
+    config.get_settings.cache_clear()
+    try:
+        mock_all(fake_railway)
+        with db.session_scope() as s:
+            _, job = provisioning.create_tenant(s, email="alpha@squire.test")
+            job_id = job.id
+        with db.session_scope() as s:
+            provisioning.advance_job(s, job_id)
+
+        sent = fake_railway.variables_for("variableCollectionUpsert")["input"]["variables"]
+        assert sent["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai"
+        assert sent["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"] == "sk-embeddings-only-test"
+        # A string, like every Railway variable -- and 384 exactly (bge-small's
+        # dimension), not text-embedding-3-small's 1536 default.
+        assert sent["HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS"] == "384"
+    finally:
+        config.get_settings.cache_clear()
+
+
+@respx.mock
 def test_tenants_are_pointed_at_the_private_control_api_when_one_is_configured(
     pool_bot, fake_railway, monkeypatch
 ):
