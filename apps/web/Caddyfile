@@ -4,6 +4,11 @@
 }
 
 :{$PORT} {
+	# Liveness probe for Railway's deploy healthcheck and any external uptime
+	# monitor. Answered by Caddy itself, so it says "the web service is up",
+	# not "control-api is up" (that has its own /healthz).
+	respond /healthz "ok" 200
+
 	# The waitlist API. `handle_path` strips the /api prefix, so the browser's
 	# POST /api/waitlist becomes POST /waitlist on control-api.
 	#

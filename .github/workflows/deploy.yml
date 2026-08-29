@@ -9,6 +9,12 @@ name: deploy
 #   `squire-prod` Railway project, authenticated with RAILWAY_TOKEN_PROD. Prod is
 #   intentionally never triggered by a plain push.
 #
+# NOT covered here: apps/web. The `web` service is GitHub-connected on Railway
+# (source GitUpSer/squire, root apps/web) and redeploys itself on push. Running
+# `railway up --service web` from here as well made every web push fail this
+# workflow ("Service not found" / snapshot conflicts) while the real deploy
+# succeeded — so web was removed from the paths, filter, and matrix 2026-08-29.
+#
 # Required GitHub secrets (set 2026-08-08):
 #   RAILWAY_TOKEN_STAGING — Railway project token scoped to squire-staging
 #   RAILWAY_TOKEN_PROD    — Railway project token scoped to squire-prod
@@ -30,7 +36,6 @@ on:
       - "apps/control-api/**"
       - "apps/ingress/**"
       - "apps/trial-proxy/**"
-      - "apps/web/**"
       # Editing the deploy workflow itself must trigger it, or a change to how we
       # deploy sits unexercised until the next unrelated service change.
       - ".github/workflows/deploy.yml"
@@ -44,7 +49,6 @@ on:
           - control-api
           - ingress
           - trial-proxy
-          - web
 
 # The workflow only needs to check out code; Railway auth is via RAILWAY_TOKEN_*
 # secrets, not GITHUB_TOKEN, so no elevated permissions are required.
@@ -82,21 +86,17 @@ jobs:
               - 'apps/ingress/**'
             trial_proxy:
               - 'apps/trial-proxy/**'
-            web:
-              - 'apps/web/**'
       - name: Assemble changed-service JSON list
         id: list
         env:
           CONTROL_API: ${{ steps.filter.outputs.control_api }}
           INGRESS: ${{ steps.filter.outputs.ingress }}
           TRIAL_PROXY: ${{ steps.filter.outputs.trial_proxy }}
-          WEB: ${{ steps.filter.outputs.web }}
         run: |
           s=()
           [ "$CONTROL_API" = "true" ] && s+=('"control-api"')
           [ "$INGRESS" = "true" ] && s+=('"ingress"')
           [ "$TRIAL_PROXY" = "true" ] && s+=('"trial-proxy"')
-          [ "$WEB" = "true" ] && s+=('"web"')
           list="[$(IFS=,; echo "${s[*]}")]"
           echo "services=$list" >> "$GITHUB_OUTPUT"
           echo "Deploy list: $list"
@@ -124,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Placeholder guard: apps/web only has .gitkeep until Phase 1A lands.
+      # Placeholder guard: skip a service directory that is still only a .gitkeep.
       - name: Check apps/${{ matrix.service }} has real content
         id: content-check
         run: |
