@@ -51,30 +51,76 @@
       "applicationCategory": "ProductivityApplication",
       "operatingSystem": "Telegram, WhatsApp",
       "description": "An AI personal assistant that lives in your text messages. Persistent memory, reminders, email triage, calendar management, online research, and integrations with Gmail, Google Calendar, GitHub, Notion, Slack and more. Runs on your existing ChatGPT or Claude subscription.",
-      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free trial at launch", "availability": "https://schema.org/PreOrder"},
-      "publisher": {"@id": "https://thesquire.co/#org"}
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "description": "Free trial at launch",
+        "availability": "https://schema.org/PreOrder"
+      },
+      "publisher": {
+        "@id": "https://thesquire.co/#org"
+      }
     },
     {
       "@type": "WebSite",
       "url": "https://thesquire.co/",
       "name": "Squire",
-      "publisher": {"@id": "https://thesquire.co/#org"}
+      "publisher": {
+        "@id": "https://thesquire.co/#org"
+      }
     },
     {
       "@type": "FAQPage",
       "mainEntity": [
-        {"@type": "Question", "name": "What is Squire?",
-         "acceptedAnswer": {"@type": "Answer", "text": "Squire is an AI personal assistant you talk to over text messages. It remembers your people, dates and preferences, sets reminders, triages your email, manages your calendar, researches things online, and follows up on standing tasks — and it asks before doing anything consequential. There is no app to install; it is a new contact in Telegram (WhatsApp soon after)."}},
-        {"@type": "Question", "name": "How is Squire different from ChatGPT or Claude?",
-         "acceptedAnswer": {"@type": "Answer", "text": "ChatGPT or Claude is the brain — Squire runs on the AI plan you already pay for. Squire adds what a chat window lacks: long-term memory across conversations, scheduled and recurring tasks, integrations with your email, calendar and tools, and a private environment of its own per user, all reachable from your messaging app."}},
-        {"@type": "Question", "name": "Which messaging apps does Squire work on?",
-         "acceptedAnswer": {"@type": "Answer", "text": "Telegram at launch, with WhatsApp following shortly after. You never install anything — your assistant messages you first."}},
-        {"@type": "Question", "name": "What can Squire connect to?",
-         "acceptedAnswer": {"@type": "Answer", "text": "Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon, with more being added. Connecting anything is optional and done on your say-so."}},
-        {"@type": "Question", "name": "Is Squire private?",
-         "acceptedAnswer": {"@type": "Answer", "text": "Each Squire runs in its own sealed environment with its own keys, and your conversations live only there. The service is built with nowhere central to store your messages — no master inbox and no admin view — and automated checks on every change fail the moment anything could leak."}},
-        {"@type": "Question", "name": "How much does Squire cost?",
-         "acceptedAnswer": {"@type": "Answer", "text": "There is a free trial at launch. Pricing will be announced when Squire launches; waitlist members hear first."}}
+        {
+          "@type": "Question",
+          "name": "What is Squire?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Squire is a personal assistant you text, the same way you'd text a friend. Ask it to remind you about something, sort out your inbox, move a meeting, or look something up, and it just does it. If something matters, it checks with you first. There's nothing to install: it shows up as a new contact in Telegram, with WhatsApp coming soon after."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How is this different from ChatGPT or Claude?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Those are the brains. Squire runs on whichever one you already pay for, and adds everything a chat window can't do: it remembers what you told it last month, it handles things on a schedule without being asked twice, it can plug into your email and calendar, and it lives in the app you already use to text people."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which messaging apps does it work on?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Telegram first, WhatsApp shortly after. You don't download anything. Your assistant sends the first message."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What can it connect to?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon to start, with more on the way. Connecting anything is up to you. It will ask, and you can always say no."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is my stuff private?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Every Squire runs in its own sealed space with its own keys, and your conversations never leave it. We built the service without a central place to store your messages, so there's no master inbox and no admin view of your life. Automated checks run on every release and fail if anything could leak."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How much does it cost?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "There's a free trial at launch. We'll announce pricing when Squire launches, and people on the waitlist hear first."
+          }
+        }
       ]
     }
   ]
@@ -318,34 +364,35 @@ footer a{color:var(--parchment-dim)}
   </section>
 
   <section id="faq">
-    <div class="kick">Questions</div>
-    <h2>The short version.</h2>
+    <div class="kick">Before you join</div>
+    <h2>FAQ</h2>
     <!-- Answers here are the on-page copy of the FAQPage JSON-LD in <head>;
-         Google requires them to match, so change both together. -->
+         Google requires them to match, so change both together
+         (or re-run the generator script from the session that wrote them). -->
     <div class="faq">
       <details>
         <summary>What is Squire?</summary>
-        <p>Squire is an AI personal assistant you talk to over text messages. It remembers your people, dates and preferences, sets reminders, triages your email, manages your calendar, researches things online, and follows up on standing tasks — and it asks before doing anything consequential. There is no app to install; it is a new contact in Telegram (WhatsApp soon after).</p>
+        <p>Squire is a personal assistant you text, the same way you'd text a friend. Ask it to remind you about something, sort out your inbox, move a meeting, or look something up, and it just does it. If something matters, it checks with you first. There's nothing to install: it shows up as a new contact in Telegram, with WhatsApp coming soon after.</p>
       </details>
       <details>
-        <summary>How is Squire different from ChatGPT or Claude?</summary>
-        <p>ChatGPT or Claude is the brain — Squire runs on the AI plan you already pay for. Squire adds what a chat window lacks: long-term memory across conversations, scheduled and recurring tasks, integrations with your email, calendar and tools, and a private environment of its own per user, all reachable from your messaging app.</p>
+        <summary>How is this different from ChatGPT or Claude?</summary>
+        <p>Those are the brains. Squire runs on whichever one you already pay for, and adds everything a chat window can't do: it remembers what you told it last month, it handles things on a schedule without being asked twice, it can plug into your email and calendar, and it lives in the app you already use to text people.</p>
       </details>
       <details>
-        <summary>Which messaging apps does Squire work on?</summary>
-        <p>Telegram at launch, with WhatsApp following shortly after. You never install anything — your assistant messages you first.</p>
+        <summary>Which messaging apps does it work on?</summary>
+        <p>Telegram first, WhatsApp shortly after. You don't download anything. Your assistant sends the first message.</p>
       </details>
       <details>
-        <summary>What can Squire connect to?</summary>
-        <p>Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon, with more being added. Connecting anything is optional and done on your say-so.</p>
+        <summary>What can it connect to?</summary>
+        <p>Gmail, Google Calendar, Google Drive, Outlook, GitHub, Notion, Slack, Todoist, Spotify, Uber, OpenTable and Amazon to start, with more on the way. Connecting anything is up to you. It will ask, and you can always say no.</p>
       </details>
       <details>
-        <summary>Is Squire private?</summary>
-        <p>Each Squire runs in its own sealed environment with its own keys, and your conversations live only there. The service is built with nowhere central to store your messages — no master inbox and no admin view — and automated checks on every change fail the moment anything could leak.</p>
+        <summary>Is my stuff private?</summary>
+        <p>Yes. Every Squire runs in its own sealed space with its own keys, and your conversations never leave it. We built the service without a central place to store your messages, so there's no master inbox and no admin view of your life. Automated checks run on every release and fail if anything could leak.</p>
       </details>
       <details>
-        <summary>How much does Squire cost?</summary>
-        <p>There is a free trial at launch. Pricing will be announced when Squire launches; waitlist members hear first.</p>
+        <summary>How much does it cost?</summary>
+        <p>There's a free trial at launch. We'll announce pricing when Squire launches, and people on the waitlist hear first.</p>
       </details>
     </div>
   </section>
