@@ -87,13 +87,32 @@ def run(argv, *, env=None, timeout=60, stdin=None):
     return result.stdout
 
 
+@contextlib.contextmanager
+def offline_sqlite(path):
+    """Finish an offline output in its main file before hashing or promotion.
+
+    sqlite3.Connection's context manager commits but does not close. In WAL
+    mode a committed transaction can therefore remain absent from a copied .db.
+    Never use this helper for the live source: only new/offline destination files.
+    """
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        try:
+            yield db
+            db.commit()
+            status=db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            require(status is not None and status[0]==0,"offline_sqlite_checkpoint_busy")
+        except BaseException:
+            db.rollback()
+            raise
+
+
 def backup_sqlite(source: Path, destination: Path, expected_schema: str, timeout=900):
     require(sqlite_inventory(source).get("schema_sha256") == expected_schema, "source_schema_changed")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     deadline = time.monotonic() + timeout
     def progress(status, remaining, total):
         require(time.monotonic() < deadline, "sqlite_backup_timeout")
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=5) as src, sqlite3.connect(destination) as target:
+    with contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=5)) as src, offline_sqlite(destination) as target:
         src.backup(target, pages=256, progress=progress, sleep=0.05)
         require(target.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "sqlite_backup_corrupt")
     destination.chmod(0o600)
@@ -329,7 +348,7 @@ def remap_private_state(root: Path, mapping, runtime_sessions_dir: str):
         require(len(active) == 1, "exactly_one_active_session_required")
         active_ids.add(active[0]["old_session_id"])
     mirror = {}
-    with sqlite3.connect(path) as db:
+    with offline_sqlite(path) as db:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("BEGIN IMMEDIATE")
@@ -381,7 +400,7 @@ def export_group_history(state: Path, mapping, output: Path, recipient: str):
     """Export only platform-backed visible messages, never model/tool/private context."""
     require(sqlite_inventory(state).get("schema_sha256") == STATE_SCHEMA, "unreviewed_state_schema")
     require(mapping.get("kind") == "group" and SAFE_PART.fullmatch(mapping["conversation_id"]), "group_mapping_required")
-    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as db:
+    with contextlib.closing(sqlite3.connect(f"file:{state}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT source,chat_id,chat_type FROM sessions WHERE id=?", (mapping["old_session_id"],)).fetchone()
         require(row is not None and row["source"] == "whatsapp" and row["chat_type"] == "group"
@@ -445,7 +464,7 @@ def verify_tree(root: Path):
     for relative, schema in manifest["sqlite"].items():
         path = safe_path(root, relative)
         require(sqlite_inventory(path).get("schema_sha256") == schema, "restored_schema_mismatch")
-        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
             require(db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "restored_sqlite_corrupt")
     return {"migration_id": manifest["migration_id"], "verified": True, "final": manifest["final"],
             "file_count": len(manifest["files"]), "source_release": manifest["source_release"]}

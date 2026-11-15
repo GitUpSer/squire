@@ -59,7 +59,11 @@ def register_runtime(session,tenant,clients):
 def admit_turn(session:Session,tenant_id:str,runtime_id:str,operation_id:str):
     # Serialize all DM + group consumption against the sponsor's entitlement row.
     session.execute(update(PilotEntitlement).where(PilotEntitlement.tenant_id==tenant_id).values(revision=PilotEntitlement.revision+1))
-    ent=session.get(PilotEntitlement,tenant_id);runtime=session.get(PilotRuntime,runtime_id)
+    # The UPDATE obtains the row lock but does not refresh other attributes in
+    # SQLAlchemy's identity map. A caller may have loaded these rows before a
+    # concurrent quota/lifecycle change, so read the locked/current database state.
+    ent=session.get(PilotEntitlement,tenant_id,populate_existing=True)
+    runtime=session.get(PilotRuntime,runtime_id,populate_existing=True)
     now=utcnow();s=get_settings()
     def decision(allowed,reason):
         result={"allowed":allowed,"reason":reason,"activated_at":ent.activated_at if ent else None,"expires_at":ent.expires_at if ent else None,"remaining_turns":max(0,s.pilot_daily_turn_limit-ent.daily_turns) if ent else 0,"runtime_ready":bool(runtime and runtime.ready)}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -40,7 +41,7 @@ def bounded_files(root: Path, depth=4, maximum=10000):
 def sqlite_inventory(path: Path):
     result = {"size": path.stat().st_size, "tables": []}
     try:
-        with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1) as db:
+        with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)) as db:
             db.execute("PRAGMA query_only=ON")
             schema = db.execute("SELECT name,type,sql FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY name").fetchall()
             result["schema_sha256"] = hashlib.sha256(json.dumps(schema).encode()).hexdigest()

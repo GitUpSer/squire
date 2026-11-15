@@ -27,7 +27,7 @@ Required frontend DNS records:
 | control-db | `95df0541-8270-4e39-a84e-91e5942c8400` | Database deployment SUCCESS |
 | messaging-db | `ebf57ca6-0e7c-426d-98fd-2e38cdb42b8d` | Database deployment SUCCESS |
 | litellm-db | `b9520966-65e9-4931-a98b-42c65758de7a` | Database deployment SUCCESS |
-| control-api | `e6f51482-3db5-423f-8d76-3a1db48c0641` | SUCCESS; admission closed; reviewed control v4 deployed |
+| control-api | `e6f51482-3db5-423f-8d76-3a1db48c0641` | SUCCESS; admission closed; reviewed control v5 deployed |
 | control-worker | `c5e4b1e8-4fa6-47e8-a6f7-ad1bdfb4ce3e` | SUCCESS; processing disabled |
 | messaging-api | `e2471ffb-9747-4e48-8359-9f656a6e3d3c` | SUCCESS; explicit pre-deploy migration |
 | messaging-worker | `bdf3a124-3bc3-4c80-befd-fd1f171f9dff` | SUCCESS; outbound disabled |
@@ -165,8 +165,8 @@ CI results are recorded below.
 
 Latest verified production deployments (all SUCCESS):
 
-- Control API `f1a88f57-413a-4059-bab0-4b3f6b8fa1a1`; worker
-  `725e8bc4-ee6a-4c6b-b723-4c1a488ca91a`. Database revision 2 is verified.
+- Control API `f1dbbff6-f8ee-45ac-a395-55e0e53aa51e`; worker
+  `ab7a3fe7-7a52-4a69-ac8f-4136ea45b7d5`. Database revision 2 is verified.
   Admission, provisioning worker, and lifecycle worker remain disabled.
 - Messaging API `1d70cf11-4a77-45dc-940b-eafb6c4c1d23`; worker
   `60d4722b-1e34-48af-9e14-eb2004e8540a`. Outbound remains disabled.
@@ -175,7 +175,7 @@ Latest verified production deployments (all SUCCESS):
 - Web `72c1cd25-bb45-4a2c-b77e-56768aa220ca`; public HTTPS returns 200 and
   the operator route returns 404.
 
-Current checks: control 277 passed including PostgreSQL races; messaging 32
+Current checks: control 283 passed including PostgreSQL races; messaging 32
 passed against PostgreSQL; transport 19 passed including pinned wacli and both
 loopback address families. The browser acceptance harness passed two signups,
 first outbound phone challenges, independent runtime/backup capabilities,
@@ -254,8 +254,9 @@ Immutable image references in `ghcr.io/gitupser/squire/hermes-tenant-pilot`:
 
 These are configured as `TENANT_IMAGE` and `PILOT_FOUNDER_IMAGE` on both control
 services, together with `PILOT_FOUNDER_BACKUP_BUCKET=pilot-founder-dm-backups`.
-Deployment was skipped, so the values take effect at the next deployment after
-registry credentials are installed. Provisioning and admission remain disabled.
+The values were initially saved without a deployment and are included in the
+subsequent control v5 deployment. Provisioning and admission remain disabled;
+private registry credentials are still required before runtime creation.
 Registry visibility remains private; organization policy was not weakened.
 
 At commit `c17dfa41cde4c3e327378bc0b3f1f1a2b36d9aac`, all three workflows passed:
@@ -267,3 +268,42 @@ accounting acceptance. The tenant checks now include 34 migration/backup tests
 using actual pinned Hermes source and verified age tools. Local runtime and
 migration checks also passed, including restored-home adoption and source-mode
 preservation. No actual WhatsApp delivery has been tested yet.
+
+
+### Admission state regression and deployment
+
+A separate deterministic regression showed that admission could use stale
+quota/pause fields when its SQLAlchemy session had loaded the rows before
+another transaction updated them. Acquiring the row lock did not refresh those
+cached attributes. Admission now explicitly refreshes entitlement and runtime
+reads after the lock. Three SQLite and three PostgreSQL regressions verify
+spent quota, paused entitlement, and paused runtime behavior. This does not
+establish the cause of the earlier HTTP concurrency failure, whose requests
+used fresh sessions and whose original row diagnostics were not retained.
+
+Control validation passed 283 tests: 276 in the full-suite invocation, plus all
+seven PostgreSQL cases after correcting the test URL to explicitly select the
+installed psycopg driver. The initial generic PostgreSQL URL caused seven setup
+errors for absent psycopg2; these were test invocation errors, not application
+failures. Deployment context manifest SHA256:
+`f1530a336d8266a9e9559be496a632ed1c007b13c56226d44924769c40712b96`.
+Both control v5 deployments listed above reached SUCCESS.
+
+
+### Verified historical session provenance
+
+The independent metadata audit found exact Hindsight routing evidence for six
+of 174 untyped historical WhatsApp sessions. All six match the already verified
+founder DM; actor IDs, display names, and message contents were not used to infer
+routing. The offline helper pins both source archives and the reviewed candidate
+manifest, re-extracts metadata, rejects conflicts, and creates a separate 0600
+database. Thirteen focused tests passed, including standalone WAL-mode output.
+
+The real archive rehearsal exposed and then verified a fix for SQLite journal
+checkpointing before publication. Independent immutable reads of the corrected
+output show 38 DM, six group, and 168 untyped sessions (212 total), compared with
+32 DM, six group, and 174 untyped sessions in the unchanged original. The output
+hash is `396d94ad10f0917ce2d82fdbf20c45895ef421e6e8711b73d0ce2774de7a3262`.
+It remains an offline intermediate: ordinary private-history remapping must
+remove other conversations and old pending operations before promotion. The 168
+unresolved sessions remain archived, and full active-history parity is not claimed.

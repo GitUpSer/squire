@@ -2,6 +2,7 @@
 """Offline-only scoped founder transformations. Never starts a runtime or edits source."""
 from __future__ import annotations
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
-from migrate_personal_agent import MigrationError, require, atomic_json, checksum, SAFE_PART
+from migrate_personal_agent import MigrationError, require, atomic_json, checksum, SAFE_PART, offline_sqlite
 from pilot_inventory import sqlite_inventory
 
 DATABASES={"executions.db":("executions","cron_incidents"),"deliveries.db":("deliveries","delivery_tombstones"),"notepad.db":("cron_notepad",)}
@@ -33,7 +34,7 @@ def cron_inventory(source):
 
 def empty_database(source,destination,tables):
     require(not destination.exists(),"destination_database_exists")
-    with sqlite3.connect(f"file:{source}?mode=ro",uri=True) as old, sqlite3.connect(destination) as new:
+    with contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro",uri=True)) as old, offline_sqlite(destination) as new:
         for table in tables:
             sql=old.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone()
             require(sql is not None,"source_ledger_table_missing")
@@ -47,7 +48,7 @@ def insert_row(db,table,row):
 
 
 def read_rows(path,table):
-    with sqlite3.connect(f"file:{path}?mode=ro",uri=True) as db:
+    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro",uri=True)) as db:
         db.row_factory=sqlite3.Row
         return [dict(row) for row in db.execute('SELECT * FROM "'+table+'"')]
 
@@ -110,7 +111,7 @@ def transform_cron(source,output,plan):
             for name,tables in DATABASES.items():empty_database(source/name,destination/name,tables)
             executions={row["id"]:row for row in read_rows(source/"executions.db","executions") if row["job_id"] in selected}
             uncertain=[]
-            with sqlite3.connect(destination/"executions.db") as db:
+            with offline_sqlite(destination/"executions.db") as db:
                 for row in executions.values():
                     if row["status"] in {"claimed","running","unknown"}:
                         row["status"]="unknown";row["error"]="migration_requires_reconciliation";uncertain.append(row["id"])
@@ -121,7 +122,7 @@ def transform_cron(source,output,plan):
                 if runtime["kind"]=="dm":
                     for row in read_rows(source/"executions.db","cron_incidents"):
                         if row["job_id"] in selected:insert_row(db,"cron_incidents",row)
-            with sqlite3.connect(destination/"deliveries.db") as db:
+            with offline_sqlite(destination/"deliveries.db") as db:
                 for row in read_rows(source/"deliveries.db","deliveries"):
                     if row["execution_id"] not in executions:continue
                     status=row["status"]
@@ -136,7 +137,7 @@ def transform_cron(source,output,plan):
                 for row in read_rows(source/"deliveries.db","delivery_tombstones"):
                     if row["execution_id"] in executions and row["execution_id"] not in existing:insert_row(db,"delivery_tombstones",row)
             if runtime["kind"]=="dm":
-                with sqlite3.connect(destination/"notepad.db") as db:
+                with offline_sqlite(destination/"notepad.db") as db:
                     for row in read_rows(source/"notepad.db","cron_notepad"):
                         if row["job_id"] in selected:insert_row(db,"cron_notepad",row)
             reports.append({"runtime_id":runtime["runtime_id"],"kind":runtime["kind"],"jobs":len(selected),"job_ids":sorted(selected),"uncertain_execution_ids":sorted(set(uncertain)),"formerly_enabled_job_ids":[jid for jid in selected if jobs[jid].get("enabled")],"all_jobs_paused":True})
@@ -189,7 +190,7 @@ def import_group_history(source,output,conversation_id,approved_claim_id,runtime
         finally:state.close()
         stamp=datetime.now(timezone.utc).isoformat()
         entry={"session_key":key,"session_id":session_id,"created_at":stamp,"updated_at":stamp,"platform":"squire","chat_type":"group","metadata":{},"origin":origin,"suspended":False,"resume_pending":False,"active_turn_token":None,"active_turn_started_at":None,"transport_profile":"default"}
-        with sqlite3.connect(stage/"state.db") as db:
+        with offline_sqlite(stage/"state.db") as db:
             db.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES(?,?,?,?)",(runtime_sessions_dir,key,json.dumps(entry),datetime.now(timezone.utc).timestamp()))
             require(db.execute("PRAGMA integrity_check").fetchone()[0]=="ok","group_import_integrity_failed")
         atomic_json(stage/"sessions/sessions.json",{key:entry})

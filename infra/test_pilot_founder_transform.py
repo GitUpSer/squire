@@ -1,5 +1,7 @@
 import json
 import sqlite3
+import shutil
+from contextlib import closing
 from pathlib import Path
 import pytest
 import pilot_founder_transform as transform
@@ -67,8 +69,15 @@ def test_memory_config_preserves_bank_and_only_repoints_loopback(tmp_path):
     with pytest.raises(MigrationError,match="local_runtime"):transform.prepare_memory_config(source,tmp_path/"bad.json",before,"https://external.invalid")
 
 
-def test_group_history_import_uses_actual_hermes_new_database_only_visible_rows(tmp_path):
+def test_group_history_import_uses_actual_hermes_new_database_only_visible_rows(tmp_path,monkeypatch):
     pytest.importorskip("hermes_state")
+    connect=sqlite3.connect
+    def wal_output(path,*args,**kwargs):
+        db=connect(path,*args,**kwargs)
+        if ".squire-group-import-" in str(path) and not str(path).startswith("file:"):
+            db.execute("PRAGMA journal_mode=WAL")
+        return db
+    monkeypatch.setattr(sqlite3,"connect",wal_output)
     original=tmp_path/"export";original.mkdir()
     payload={"conversation_id":"group-opaque","messages":[{"role":"user","content":"Visible group text","timestamp":12345,"platform_message_id":"provider-id"}]}
     (original/"visible-history.json").write_text(json.dumps(payload))
@@ -83,6 +92,11 @@ def test_group_history_import_uses_actual_hermes_new_database_only_visible_rows(
         assert db.execute("SELECT COUNT(*) FROM system_prompts").fetchone()[0]==0
         assert db.execute("SELECT session_key FROM gateway_routing").fetchone()[0]=="agent:main:squire:group:group-opaque"
     assert not (output/"auth.json").exists() and not (output/"memory").exists()
+    standalone=tmp_path/"group-standalone.db";shutil.copyfile(output/"state.db",standalone)
+    with closing(sqlite3.connect(f"file:{standalone}?mode=ro&immutable=1",uri=True)) as db:
+        assert db.execute("SELECT session_key FROM gateway_routing").fetchone()[0]=="agent:main:squire:group:group-opaque"
+        assert db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]==1
+        assert db.execute("PRAGMA integrity_check").fetchone()==("ok",)
 
 
 def test_actual_hermes_scheduler_resolves_registered_group_toolset(tmp_path,monkeypatch):
@@ -175,3 +189,22 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
     assert config["mcp_servers"]=={"calendar":{"command":"calendar-cli"}}
     assert config["platform_toolsets"]=={"squire":["terminal","browser"]}
     with pytest.raises(MigrationError,match="direct_send"):transform.prepare_runtime_config(source,tmp_path/"bad.yaml",checksum(source),"opaque-owner",["old-direct"])
+
+
+def test_cron_wal_outputs_are_complete_without_sidecars(tmp_path,monkeypatch):
+    original,jobs=source(tmp_path);plan=plan_for(original,jobs)
+    connect=sqlite3.connect
+    def wal_output(path,*args,**kwargs):
+        db=connect(path,*args,**kwargs)
+        if ".squire-cron-transform-" in str(path) and not str(path).startswith("file:"):
+            db.execute("PRAGMA journal_mode=WAL")
+        return db
+    monkeypatch.setattr(sqlite3,"connect",wal_output)
+    output=tmp_path/"cron-output";transform.transform_cron(original,output,plan)
+    for runtime in ("owner-runtime","group-runtime"):
+        expected={"executions.db":("executions",1),"deliveries.db":("delivery_tombstones",1),"notepad.db":("cron_notepad",1 if runtime=="owner-runtime" else 0)}
+        for filename,(table,count) in expected.items():
+            standalone=tmp_path/(runtime+"-"+filename);shutil.copyfile(output/runtime/"cron"/filename,standalone)
+            with closing(connect(f"file:{standalone}?mode=ro&immutable=1",uri=True)) as db:
+                assert db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]==count
+                assert db.execute("PRAGMA integrity_check").fetchone()==("ok",)

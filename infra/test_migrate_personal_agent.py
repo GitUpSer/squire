@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 import sqlite3
+import shutil
+from contextlib import closing
 import subprocess
 import sys
 import tarfile
@@ -210,3 +212,47 @@ def test_private_remap_retains_all_owner_history_with_one_active_route(tmp_path,
         assert db.execute("SELECT COUNT(*) FROM gateway_routing").fetchone()[0]==1
         assert json.loads(db.execute("SELECT entry_json FROM gateway_routing").fetchone()[0])["session_id"]=="dm"
         assert db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]==2
+
+
+def test_wal_remap_is_complete_in_standalone_database_before_hash(tmp_path,monkeypatch):
+    root=tmp_path/"wal-private";state=make_migration_state(root,monkeypatch)
+    with closing(sqlite3.connect(state)) as setup:
+        setup.execute("PRAGMA journal_mode=WAL")
+    migration.remap_private_state(root,[dict(old_session_id="dm",kind="dm",old_chat_jid="123@s.whatsapp.net",conversation_id="opaque-dm")],"/opt/data/sessions")
+    standalone=tmp_path/"standalone.db";shutil.copyfile(state,standalone)
+    with closing(sqlite3.connect(f"file:{standalone}?mode=ro&immutable=1",uri=True)) as db:
+        assert db.execute("SELECT id,source,chat_id FROM sessions").fetchall()==[("dm","squire","opaque-dm")]
+        assert db.execute("SELECT scope FROM gateway_routing").fetchall()==[("/opt/data/sessions",)]
+        assert db.execute("PRAGMA integrity_check").fetchone()==("ok",)
+    report=json.loads((root/"IMPORT_RESULT.json").read_text())
+    assert report["state_sha256"]==migration.checksum(standalone)==migration.checksum(state)
+
+
+def test_backup_wal_commits_are_in_standalone_copy(tmp_path):
+    source=tmp_path/"source-wal.db";target=tmp_path/"backup.db";schema=make_sqlite(source)
+    with closing(sqlite3.connect(source)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("INSERT INTO sessions VALUES('wal-committed','committed in WAL')");writer.commit()
+        writer.execute("INSERT INTO sessions VALUES('not-committed','must not be included')")
+        migration.backup_sqlite(source,target,schema)
+        standalone=tmp_path/"standalone-backup.db";shutil.copyfile(target,standalone)
+        with closing(sqlite3.connect(f"file:{standalone}?mode=ro&immutable=1",uri=True)) as db:
+            assert db.execute("SELECT id FROM sessions ORDER BY id").fetchall()==[("one",),("wal-committed",)]
+            assert db.execute("PRAGMA integrity_check").fetchone()==("ok",)
+
+
+def test_offline_sqlite_refuses_output_with_busy_checkpoint(tmp_path):
+    path=tmp_path/"blocked-checkpoint.db"
+    with closing(sqlite3.connect(path)) as setup:
+        setup.execute("PRAGMA journal_mode=WAL")
+        setup.execute("CREATE TABLE payload(value TEXT)")
+        setup.execute("INSERT INTO payload VALUES('before')");setup.commit()
+        setup.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        with closing(sqlite3.connect(path)) as reader:
+            reader.execute("BEGIN")
+            assert reader.execute("SELECT value FROM payload").fetchone()==("before",)
+            with pytest.raises(migration.MigrationError,match="checkpoint_busy"):
+                with migration.offline_sqlite(path) as writer:
+                    writer.execute("PRAGMA busy_timeout=1")
+                    writer.execute("UPDATE payload SET value='after'")
+            reader.rollback()

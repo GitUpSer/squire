@@ -252,6 +252,33 @@ contents map directly into `/opt/data`, with routing scope `/opt/data/sessions`.
 Approved external browser state from source `.camofox` maps to
 `/opt/data/.camofox`; it is not nested beneath another `.hermes` directory.
 
+Some legacy sessions lack routing columns. `infra/pilot_session_provenance.py`
+can recover an explicitly reviewed DM identity from Hindsight's persisted
+`session_id`, `platform`, `chat_id`, and `chat_type` metadata. Actor IDs,
+message contents, names, and timestamps are never identity evidence. Run
+`inspect --state ORIGINAL_STATE --dump ORIGINAL_DUMP --pg-restore PG18_BINARY
+--output PRIVATE_CANDIDATES.json` using Python with SQLite 3.50.4 or newer for
+this source database. The private candidate manifest contains source hashes,
+exact routes, source table/row references, and metadata fingerprints.
+
+Prepare a private review with format `squire-session-provenance-review-v1`,
+the manifest's `state_sha256` and `dump_sha256`, `candidate_manifest_sha256`
+(the helper's canonical `fingerprint(manifest)`), the verified
+`approved_dm_chat_id`, and an explicit `session_ids` list. Then run
+`hydrate` with the same source arguments plus `--review PRIVATE_REVIEW.json
+--output NEW_OFFLINE_STATE.db --report PRIVATE_RESULT.json`. This re-extracts
+the dump evidence, rejects conflicts and changed sources, and writes a new
+0600 database; it does not alter the original snapshot. Place that reviewed
+output into a separate prepared restore copy before `remap-private` below.
+Hydration only restores the two missing routing columns: the ordinary private
+remapper must still remove other conversations and pending operations.
+
+The verified rehearsal contained 174 WhatsApp sessions without routing;
+six have consistent exact founder DM metadata (five in memory units, two in
+document retain parameters, with one overlap). Parent lineage adds none.
+The remaining 168 cannot currently be assigned safely and remain archived;
+full active-history parity is not yet established.
+
 Each mapping includes `old_session_id`, `old_chat_jid`, `kind:"dm"`,
 `conversation_id`, and optional opaque `actor_id`. Verify mapping against
 the messaging binding, not a display name. The importer checks the exact

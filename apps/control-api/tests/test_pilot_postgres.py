@@ -81,7 +81,7 @@ def test_concurrent_quota_is_exact(postgres):
     with ThreadPoolExecutor(max_workers=15) as pool: decisions=list(pool.map(lambda i:invoke(postgres,i),range(100)))
     with Session(db.get_engine()) as diagnostic:
         row=diagnostic.get(PilotEntitlement,"owner")
-        details={"state":row.state,"daily_turns":row.daily_turns,"daily_index":row.daily_index,"lifetime_turns":row.lifetime_turns,"activation":str(row.activated_at),"revisions":row.revision,"reasons":{reason:sum(d["reason"]==reason for d in decisions) for reason in {d["reason"] for d in decisions}},"remaining":sorted({d["remaining_turns"] for d in decisions})}
+        details={"state":row.state,"daily_turns":row.daily_turns,"daily_index":row.daily_index,"lifetime_turns":row.lifetime_turns,"activation":str(row.activated_at),"revisions":row.revision,"configured_limit":get_settings().pilot_daily_turn_limit,"turn_rows":len(diagnostic.exec(select(PilotTurn)).all()),"reasons":{reason:sum(d["reason"]==reason for d in decisions) for reason in {d["reason"] for d in decisions}},"remaining":sorted({d["remaining_turns"] for d in decisions})}
     assert sum(d["allowed"] for d in decisions)==75,details
     with Session(db.get_engine()) as session:
         assert session.get(PilotEntitlement,"owner").daily_turns==75
@@ -108,3 +108,25 @@ def test_first_turn_and_idle_pause_race_has_one_valid_winner(postgres):
         entitlement=session.get(PilotEntitlement,"idle-race")
         assert (entitlement.state,decision["reason"]) in {("activating","activating"),("setup_paused","setup_paused")}
         assert (entitlement.activated_at is not None)==(entitlement.state=="activating")
+
+
+@pytest.mark.parametrize("changed,reason",[("quota","daily_limit"),("entitlement","paused"),("runtime","paused")])
+def test_locked_admission_refreshes_rows_read_before_concurrent_commit(postgres,changed,reason):
+    """A row lock alone must not retain stale SQLAlchemy identity-map fields."""
+    from control_api.pilot_lifecycle import admit_turn
+    seed_runtime(True)
+    with Session(db.get_engine()) as older:
+        cached_ent=older.get(PilotEntitlement,"owner")
+        cached_runtime=older.get(PilotRuntime,"owner")
+        assert cached_ent.daily_turns==0 and cached_runtime.ready
+        with Session(db.get_engine()) as writer:
+            ent=writer.get(PilotEntitlement,"owner");runtime=writer.get(PilotRuntime,"owner")
+            if changed=="quota":ent.daily_turns=75;ent.lifetime_turns=75
+            elif changed=="entitlement":ent.state="paused"
+            else:runtime.state="paused"
+            writer.add(ent);writer.add(runtime);writer.commit()
+        result=admit_turn(older,"owner","owner","after-concurrent-change")
+        assert result["allowed"] is False and result["reason"]==reason
+    with Session(db.get_engine()) as session:
+        assert session.exec(select(PilotTurn)).all()==[]
+        if changed=="quota":assert session.get(PilotEntitlement,"owner").daily_turns==75
