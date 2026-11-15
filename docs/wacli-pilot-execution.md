@@ -307,3 +307,22 @@ hash is `396d94ad10f0917ce2d82fdbf20c45895ef421e6e8711b73d0ce2774de7a3262`.
 It remains an offline intermediate: ordinary private-history remapping must
 remove other conversations and old pending operations before promotion. The 168
 unresolved sessions remain archived, and full active-history parity is not claimed.
+
+
+### Standalone migration verification after WAL fixes
+
+The same SQLite lifetime issue affected existing offline history remapping and
+cron output. A shared offline writer now commits, checkpoints the WAL with an
+explicit busy check, and closes before hashing or publishing the main database.
+Regression tests failed before the fix and now cover standalone history removal,
+committed-only backup, cron data, actual Hermes group routing, and busy rejection.
+The combined migration/backup suite passed all 51 tests.
+
+A separate copy of the actual hydrated archive was then remapped to a synthetic
+rehearsal conversation. Immutable SQLite verification found exactly 38 Squire DM
+sessions, one active route, zero old pending operations, and no foreign-key
+errors. Groups and unresolved sessions were absent from this standalone output.
+The source archives remain unchanged. Output SHA256:
+`9ebae9649509585eedf496e898283195e439ea75cf05fa9b277243f70902edb7`.
+This proves offline transformation behavior, not production identity mapping or
+permission to start a migrated runtime. Code is recorded in commit `6226714`.
