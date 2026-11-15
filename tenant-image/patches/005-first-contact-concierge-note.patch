@@ -1,214 +1,84 @@
 diff --git a/gateway/run.py b/gateway/run.py
 --- a/gateway/run.py
 +++ b/gateway/run.py
-@@ -630,6 +630,51 @@
-             return None
+@@ -743,6 +743,10 @@
+         return None
      if _looks_like_gateway_provider_error(text):
          return _gateway_provider_error_reply(text)
-+    # (squire patch 005) THE STATUS-NOTICE CHOKEPOINT. Every agent status
-+    # callback hermes would forward to a chat surface funnels through this
-+    # one function as event_type in {"lifecycle", "warn", "compacted"}
-+    # (run_agent._emit_status / _emit_warning; conversation_compression's
-+    # "compacted" done-status). There is NO dedicated "error" category:
-+    # genuine provider/API failures are recognised by TEXT SHAPE
-+    # (_looks_like_gateway_provider_error) and REWRITTEN to a short,
-+    # user-safe reply in the branch immediately above -- so by the time
-+    # control reaches this terminal `return text`, the payload is exactly
-+    # the operator-flavoured residue: the info/lifecycle/auxiliary/
-+    # compression chatter that is neither a provider error nor already
-+    # dropped above as noisy status.
-+    #
-+    # Incident history -- raw hermes OPERATOR notices kept leaking to
-+    # Squire end users at the worst moments. "Gateway shutting down" and
-+    # "Gateway online" are gated elsewhere (stop() +
-+    # gateway_restart_notification). "Provider authentication failed" is a
-+    # REWRITE and MUST survive -- a user deserves a sanitised "something
-+    # went wrong", not silence. The one that finally motivated a GENERAL
-+    # fix is the auto-compaction banner replayed on turn 1:
-+    #   "Codex gpt-5.4 caps context at 272K, so auto-compaction was
-+    #    raised to 92% (from 80%) ..."
-+    # (agent_init._build_codex_gpt5_autoraise_notice, stashed in
-+    # agent._compression_warning and re-emitted via
-+    # status_callback("lifecycle", ...)). The audience is non-technical;
-+    # this internal chatter is noise, never actionable.
-+    #
-+    # So gate the terminal return -- the operator-info residue -- behind
-+    # one env var. Positioned AFTER the provider-error rewrite ON PURPOSE,
-+    # so the suppress-vs-keep boundary is STRUCTURAL, not a fragile
-+    # category allowlist: user-facing provider errors already returned
-+    # above and are untouched; the local/CLI raw-diagnostic path and the
-+    # already-dropped noisy-status path above are likewise untouched; only
-+    # the info/lifecycle/aux/compression residue is silenced. Polarity
-+    # matches the shutdown-notices gate and is DEFAULT-QUIET:
-+    #
-+    #   SQUIRE_STATUS_NOTICES unset / "" / "0" / "off"  -> suppress (None)
-+    #   any other value (e.g. "all")                    -> upstream, unchanged
-+    #
-+    # Default-quiet is safe even where the var is absent: a self-hosted
-+    # hermes without Squire's overlay never runs this patch at all, and the
-+    # tenant image bakes SQUIRE_STATUS_NOTICES=0 in the Dockerfile so the
-+    # policy is explicit rather than implied by absence.
++    # (squire patch 005) THE STATUS-NOTICE CHOKEPOINT. Preserve the provider
++    # error rewrite above; suppress only operator chatter on chat surfaces.
 +    if os.environ.get("SQUIRE_STATUS_NOTICES", "0").strip().lower() in ("", "0", "off"):
 +        return None
      return text
  
  
-@@ -9138,6 +9183,40 @@
-         messages can be delivered. Best-effort: individual send failures are
-         logged and swallowed so they never block the shutdown sequence.
-         """
-+        # (squire patch 005) Squire tenants run on Railway serverless sleep:
-+        # ~13 quiet minutes after the user's last message the platform
-+        # SIGTERMs the container, which lands here via stop(). The code below
-+        # then messages the active chat AND the home channel with
-+        # "⚠️ Gateway shutting down — Your current task will be interrupted."
-+        # — and patch 005 adopts the owner's DM as the home channel, so every
-+        # routine idle-sleep would ping every user with raw operator text ten
-+        # minutes after they went quiet (observed live, 2026-08-13). Sleep is
-+        # not an incident for this product; it is the billing model, and the
-+        # audience is non-technical.
-+        #
-+        # So gate ALL user-facing shutdown/restart notices — the per-active-
-+        # session ping and the home-channel broadcast alike, both of which
-+        # only this method sends (stop() has no other send site) — behind one
-+        # env var. Polarity, chosen deliberately and DEFAULT-QUIET:
-+        #
-+        #   SQUIRE_SHUTDOWN_NOTICES unset / empty / "0"  -> send NOTHING
-+        #   any other value                              -> upstream behaviour
-+        #                                                   entirely unchanged
-+        #
-+        # Default-quiet is safe even where the var is absent (dev shells,
-+        # out-of-order rollouts): a self-hosted hermes without Squire's env
-+        # never runs this patch overlay in the first place, and the tenant
-+        # image still bakes SQUIRE_SHUTDOWN_NOTICES=0 explicitly in the
-+        # Dockerfile so the policy is visible rather than implied by absence.
-+        # When the gate is OPEN, everything downstream — dedup, the drain
-+        # suppress_notification marker, per-platform
-+        # gateway_restart_notification — runs exactly as upstream wrote it.
-+        if os.environ.get("SQUIRE_SHUTDOWN_NOTICES", "0").strip() in ("", "0"):
-+            logger.info(
-+                "squire: user-facing shutdown notices suppressed "
-+                "(SQUIRE_SHUTDOWN_NOTICES is unset/0)"
-+            )
-+            return
-         active = self._snapshot_running_agents()
-         restart_source = self._restart_command_source if self._restart_requested else None
+diff --git a/gateway/run_shutdown.py b/gateway/run_shutdown.py
+--- a/gateway/run_shutdown.py
++++ b/gateway/run_shutdown.py
+@@ -1009,6 +1009,10 @@
  
-@@ -17186,6 +17265,39 @@
-         # system prompt: present-on-turn-1/absent-on-turn-2 was a guaranteed
-         # system-prompt diff and agent rebuild.
-         if not history and not await self.async_session_store.has_any_sessions():
-+            # (squire patch 005) Squire ships its own first-conversation flow
-+            # (the `concierge` skill, driven deterministically by the
-+            # pre_llm_call hook in bin/squire-concierge-hook.py). The note built
-+            # below is a COMPETING directive in the exact same user-message
-+            # sidecar: it caps the introduction at "one or two sentences max"
-+            # and advertises /help. On a Haiku-class trial model that short,
-+            # concrete instruction reliably beats our longer one — which is
-+            # precisely how the first live tenant produced a two-line greeting
-+            # and no onboarding at all.
-+            #
-+            # So while Squire's concierge is mid-flow, none of the three
-+            # append sites below fire and the concierge owns the turn. Once
-+            # concierge state reads `complete` — or the file is absent or
-+            # unreadable, i.e. this is not a Squire tenant — upstream's
-+            # behaviour is restored untouched.
-+            #
-+            # The read sits INSIDE this guard on purpose: the block runs once
-+            # per tenant lifetime, so onboarding costs no stat() on any later
-+            # turn.
+         Called at the start of stop() while adapters are connected; send failures never block shutdown.
+         """
++        # (squire patch 005) Routine serverless sleep is not a user incident.
++        if os.environ.get("SQUIRE_SHUTDOWN_NOTICES", "0").strip() in ("", "0"):
++            logger.info("squire: shutdown notices suppressed (SQUIRE_SHUTDOWN_NOTICES unset/0)")
++            return
+         restart_source = self._restart_command_source if self._restart_requested else None
+         msg = (
+             "⚠️ Hermes is shutting down — your current task will be interrupted. "
+diff --git a/gateway/run_turn.py b/gateway/run_turn.py
+--- a/gateway/run_turn.py
++++ b/gateway/run_turn.py
+@@ -1415,6 +1415,13 @@
+         if history:
+             return
+         if not await self.async_session_store.has_any_sessions():
++            # (squire patch 005) The deterministic concierge owns onboarding.
 +            _squire_concierge_active = False
 +            try:
-+                import json as _sq_json
-+                _sq_state_path = _hermes_home / ".squire" / "concierge-state.json"
-+                _sq_raw = _sq_json.loads(_sq_state_path.read_text(encoding="utf-8"))
-+                _squire_concierge_active = (
-+                    isinstance(_sq_raw, dict)
-+                    and str(_sq_raw.get("state") or "").strip() != "complete"
-+                )
++                _sq_state = json.loads((_hermes_home / ".squire" / "concierge-state.json").read_text(encoding="utf-8"))
++                _squire_concierge_active = isinstance(_sq_state, dict) and str(_sq_state.get("state") or "").strip() != "complete"
 +            except Exception:
-+                # Fail OPEN to upstream behaviour; never let this check break
-+                # the very first message.
-+                _squire_concierge_active = False
-+
-             # Default first-contact note: a brief self-introduction.
++                pass
              _intro_note = (
                  "[System note: This is the user's very first message ever. "
-@@ -17211,16 +17323,18 @@
-                     profile_build_mode(_onb_cfg) == "ask"
-                     and not is_seen(_onb_cfg, PROFILE_BUILD_FLAG)
-                 ):
+                 "Briefly introduce yourself and mention that /help shows available commands. "
+@@ -1429,13 +1436,15 @@
+                 )
+                 _onb_cfg = _load_gateway_config()
+                 if profile_build_mode(_onb_cfg) == "ask" and not is_seen(_onb_cfg, PROFILE_BUILD_FLAG):
 -                    turn_sidecar_notes.append(profile_build_directive().strip())
-+                    if not _squire_concierge_active:  # (squire patch 005)
++                    if not _squire_concierge_active:
 +                        turn_sidecar_notes.append(profile_build_directive().strip())
                      mark_seen(_hermes_home / "config.yaml", PROFILE_BUILD_FLAG)
 -                else:
-+                elif not _squire_concierge_active:  # (squire patch 005)
++                elif not _squire_concierge_active:
                      turn_sidecar_notes.append(_intro_note)
              except Exception as _pb_err:
-                 logger.debug(
-                     "Profile-build onboarding directive failed, using plain intro: %s",
-                     _pb_err,
-                 )
+                 logger.debug("Profile-build onboarding directive failed, using plain intro: %s", _pb_err)
 -                turn_sidecar_notes.append(_intro_note)
-+                if not _squire_concierge_active:  # (squire patch 005)
++                if not _squire_concierge_active:
 +                    turn_sidecar_notes.append(_intro_note)
-         
-         # One-time prompt if no home channel is set for this platform
-         # Skip for webhooks - they deliver directly to configured targets (github_comment, etc.)
-@@ -17258,6 +17372,55 @@
-                             home_env = "set"
-                 except Exception:
-                     pass
-+            # (squire patch 005) Squire tenants are single-user Telegram DMs
-+            # provisioned per person: the chat this message arrived in IS the
-+            # home channel, always, and there is nothing for the user to
-+            # choose. Upstream's prompt asks them to run /sethome — a surface
-+            # Squire does not sell — and because it fires on the first message
-+            # of a fresh session it was the FIRST thing a new user saw, ahead
-+            # of the concierge greeting itself.
-+            #
-+            # So set it instead of asking. That turns a papered-over annoyance
-+            # into a feature: cron briefings and cross-platform delivery work
-+            # out of the box with no user action. Done through upstream's own
-+            # persist_home_channel/HomeChannel rather than by writing config by
-+            # hand, so the on-disk shape stays whatever upstream expects.
-+            #
-+            # Gated on the concierge state file existing, i.e. "this is a
-+            # Squire tenant" — the same detection the suppression above uses.
-+            # Any other deployment keeps upstream's prompt untouched.
-+            if not home_env and source.chat_id:
-+                try:
-+                    if (_hermes_home / ".squire" / "concierge-state.json").exists():
-+                        from gateway.config import (
-+                            HomeChannel as _SqHomeChannel,
-+                            persist_home_channel as _sq_persist_home,
-+                        )
-+                        _sq_home = _SqHomeChannel(
-+                            platform=source.platform,
-+                            chat_id=str(source.chat_id),
-+                            name="Squire",
-+                        )
-+                        _sq_persist_home(_sq_home)
-+                        # Make it visible to THIS process too, not just on
-+                        # disk: the gateway holds its config in memory and
-+                        # would otherwise go on believing no home is set.
-+                        try:
-+                            _sq_pc = self.config.platforms.get(source.platform)
-+                            if _sq_pc is not None:
-+                                _sq_pc.home_channel = _sq_home
-+                        except Exception:
-+                            pass
-+                        home_env = "set"
-+                        logger.info(
-+                            "squire: adopted this chat as the %s home channel",
-+                            platform_name,
-+                        )
-+                except Exception:
-+                    # Never let this cost the user their first message.
-+                    # Falling through just restores upstream's prompt.
-+                    logger.debug("squire home-channel adoption failed", exc_info=True)
-+
-             if not home_env:
-                 # Slack dispatches all Hermes commands through a single
-                 # parent slash command `/hermes`; bare `/sethome` is not
+ 
+         # One-time prompt if no home channel is set (webhooks deliver to configured targets instead).
+         if not source.platform or source.platform in (Platform.LOCAL, Platform.WEBHOOK):
+@@ -1460,6 +1469,19 @@
+                 prof = (getattr(source, "profile", None) or "").strip()
+                 if prof and prof != "default" and _lgc().get_home_channel(source.platform):
+                     home_env = "set"
++        # (squire patch 005) The approved conversation is this runtime's home.
++        if not home_env and source.chat_id and (_hermes_home / ".squire" / "concierge-state.json").exists():
++            try:
++                from gateway.config import HomeChannel, persist_home_channel
++                _sq_home = HomeChannel(platform=source.platform, chat_id=str(source.chat_id), name="Squire")
++                persist_home_channel(_sq_home)
++                _sq_pc = self.config.platforms.get(source.platform)
++                if _sq_pc is not None:
++                    _sq_pc.home_channel = _sq_home
++                home_env = "set"
++                logger.info("squire: adopted this chat as the %s home channel", platform_name)
++            except Exception:
++                logger.debug("squire home-channel adoption failed", exc_info=True)
+         if not home_env:
+             # Slack routes every command through the parent `/hermes`; bare `/sethome` would fail.
+             sethome_cmd = "/hermes sethome" if source.platform == Platform.SLACK else "/sethome"

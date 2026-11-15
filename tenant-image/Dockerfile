@@ -32,14 +32,13 @@
 # PINNING / BUMPING
 # -----------------
 # The base is pinned BY DIGEST, not by tag. A tag is a mutable pointer: upstream
-# re-tagging v2026.8.3 would silently change what every tenant runs, and the
+# re-tagging the upstream release would silently change what every tenant runs, and the
 # patch overlay below would be applying to a tree we never verified. The digest
 # makes the base immutable and the build reproducible.
 #
-# Digest below == docker.io/nousresearch/hermes-agent:v2026.8.3 (linux/amd64),
-# resolved 2026-08-07. That is the current upstream release, and the same tag
-# docs/reference/hermes-update-plan-v2026.8.3.md rehearsed and executed against,
-# so the patch overlay and marker greps are known-good on it.
+# Digest below == docker.io/nousresearch/hermes-agent:v2026.9.24 (linux/amd64),
+# verified 2026-11-15 against source f97608f178d1ffeca59860195ab7da295f7c8e5f.
+# This is the pilot image only; the existing fleet stays on its deployed digest.
 #
 # NOTE: pinning a per-arch digest makes this image amd64-only. That is what
 # Railway runs, and a tenant image is not something anyone builds on a laptop.
@@ -50,7 +49,7 @@
 # re-run the patch overlay and re-verify the markers. Never bump without the
 # canary drill in the update plan (§7 verification gates).
 #
-FROM docker.io/nousresearch/hermes-agent@sha256:c0cab4e3711bcb27a312be1b3776254fc06fd50d5f7a6b8017915fc7171cb39e
+FROM docker.io/nousresearch/hermes-agent@sha256:2fd023efbb8d3d2b0ce1a73d028b07370cff34f567cfe0e999553e8c327ea283
 
 # Human-readable provenance for the tag the digest above corresponds to.
 # Metadata only — changing it does not change what is built, which is exactly why
@@ -67,7 +66,7 @@ FROM docker.io/nousresearch/hermes-agent@sha256:c0cab4e3711bcb27a312be1b3776254f
 #
 # The CI job asserts instead on the property that matters — that the FROM line
 # is digest-pinned at all.
-ARG HERMES_VERSION=v2026.8.3
+ARG HERMES_VERSION=v2026.9.24
 
 # Pinned exactly, matching the digest-pin discipline above: a floating range is
 # the same mutable-input problem in a different coat. Every version below was
@@ -100,7 +99,7 @@ ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a2515158
 # hindsight's own embedded-mode guard.
 USER root
 
-LABEL org.opencontainers.image.title="squire-hermes-tenant" \
+LABEL org.opencontainers.image.title="squire-hermes-tenant-pilot" \
       org.opencontainers.image.description="Squire per-tenant agent runtime: hermes-agent + Hindsight + embedded Postgres" \
       ai.squire.hermes.version="${HERMES_VERSION}"
 
@@ -310,11 +309,9 @@ RUN /usr/local/bin/restic version
 # script now checks for the binary explicitly (see its header), but the real fix
 # is to install it.
 #
-# Why patch(1) and not `git apply`, which IS present: our patches were generated
-# against a June tree and land on v2026.8.3 with large line offsets (001 +549,
-# 002 +2087, 003 +1620). Offset tolerance is exactly what patch(1) is for.
-# git apply is stricter about context location and would turn a survivable
-# offset into a build failure on the next upstream bump.
+# The active patches are regenerated against the exact v2026.9.24 source.
+# compatibility.py applies them to an independent pristine source copy and
+# executes behavior from the resulting functions before the image can publish.
 RUN apt-get -o Acquire::Retries=3 update \
  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends patch \
  && rm -rf /var/lib/apt/lists/*
@@ -322,7 +319,17 @@ RUN apt-get -o Acquire::Retries=3 update \
 COPY patches/ /opt/squire/patches/
 RUN chmod 0755 /opt/squire/patches/*.sh \
  && /opt/squire/patches/apply-patches.sh /opt/hermes \
- && /opt/squire/patches/verify-markers.sh /opt/hermes
+ && /opt/squire/patches/verify-markers.sh /opt/hermes \
+ && /opt/squire/venv/bin/python /opt/squire/patches/compatibility.py /opt/hermes --applied
+
+# The installed plugin and root-owned managed configuration ship with the image.
+# They are never replaced by tenant-owned config on the persistent volume.
+COPY overlay/ /opt/squire/overlay/
+COPY overlay/managed/config.yaml /etc/hermes/config.yaml
+RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-deps /opt/squire/overlay/plugin \
+ && uv pip install --no-config --python /opt/squire/venv/bin/python --no-deps /opt/squire/overlay/plugin \
+ && chmod 0644 /etc/hermes/config.yaml \
+ && /opt/hermes/.venv/bin/python /opt/squire/overlay/gate/contract.py
 
 # ---------------------------------------------------------------------------
 # 4. Squire runtime files

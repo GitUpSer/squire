@@ -565,6 +565,9 @@ def run_loop(stop: threading.Event) -> None:
 
 def main(argv: list[str]) -> int:
     once = "--once" in argv[1:]
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        from squire_overlay.heartbeat import run
+        return run(once)
 
     if not (CONTROL_API_URL and INTERNAL_TOKEN and TENANT_ID):
         # Standalone `docker run` with no control plane. Exit 0 rather than

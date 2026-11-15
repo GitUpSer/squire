@@ -405,5 +405,18 @@ if ! "$SQUIRE_BIN/squire-secrets-sync.sh" --once; then
      $STATE_DIR is writable."
 fi
 
+if [ -n "${SQUIRE_RUNTIME_ID:-}" ]; then
+    # The runtime owns one broker-authorized scope; no legacy provider socket.
+    while IFS= read -r _transport_var; do
+        case "$_transport_var" in WHATSAPP_*|TELEGRAM_*|DISCORD_*|SLACK_*|SIGNAL_*|INTERNAL_API_TOKEN) unset "$_transport_var" ;; esac
+    done < <(compgen -e)
+    unset _transport_var
+    unset HERMES_SAFE_MODE PYTEST_CURRENT_TEST
+    export HERMES_MANAGED_DIR=/etc/hermes
+    export SQUIRE_SCOPED_ALLOW_ALL=true
+    export SQUIRE_HOME_CHANNEL="$SQUIRE_CONVERSATION_ID"
+    /opt/hermes/.venv/bin/python -m squire_overlay.bootstrap
+fi
+
 log "starting supervisord"
 exec "$SQUIRE_SUPERVISORD" -n -c "$SQUIRE_SUPERVISORD_CONF"

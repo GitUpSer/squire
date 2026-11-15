@@ -524,6 +524,13 @@ def notify_control_api(provider: str) -> bool:
     bearer. Provider NAME only — never credential material. Non-fatal: the
     heartbeat's llm_connected marker is the reconciliation backstop."""
     base = (os.environ.get("CONTROL_API_URL") or "").rstrip("/")
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        # Provider connection never changes product entitlement. The scoped
+        # callback revokes the old trial key and records only provider name.
+        request=urllib.request.Request(base+"/v1/runtime/"+os.environ["SQUIRE_RUNTIME_ID"]+"/provider",method="POST",data=json.dumps({"provider":provider}).encode(),headers={"Content-Type":"application/json","Authorization":"Bearer "+os.environ.get("SQUIRE_CONTROL_TOKEN","")})
+        try:
+            with urllib.request.urlopen(request,timeout=20) as response:return 200<=response.status<300
+        except (OSError,urllib.error.URLError):return False
     token = os.environ.get("INTERNAL_API_TOKEN") or ""
     tenant_id = os.environ.get("TENANT_ID") or ""
     if not (base and token and tenant_id):
@@ -606,6 +613,8 @@ def _resolve_owner_chat_id(hermes_home: str | None) -> str | None:
     but this must be safe rather than raise). For a Telegram DM the chat_id is
     the owner's user id, which is exactly the KEY autopair stores the record
     under — so the store's single key is the chat_id."""
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        return os.environ.get("SQUIRE_CONVERSATION_ID") if os.environ.get("SQUIRE_RUNTIME_KIND")=="dm" else None
     home = hermes_home or os.environ.get("HERMES_HOME") or "/opt/data"
     try:
         import squire_autopair  # bin/ is on sys.path via the shim/CLI importer
@@ -787,7 +796,7 @@ def notify_owner_connected(provider: str, hermes_home: str | None = None) -> boo
     hermes_bin = os.environ.get("SQUIRE_HERMES_BIN") or _hermes_binary()
     try:
         result = subprocess.run(
-            [hermes_bin, "send", "--to", f"telegram:{chat_id}", text],
+            [hermes_bin, "send", "--to", f"{'squire' if os.environ.get('SQUIRE_RUNTIME_ID') else 'telegram'}:{chat_id}", text],
             capture_output=True, timeout=30, check=False,
             env=_send_env(hermes_home),
         )

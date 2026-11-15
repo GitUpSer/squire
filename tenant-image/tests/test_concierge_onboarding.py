@@ -1537,7 +1537,7 @@ check(
 # per tenant lifetime, so onboarding costs no filesystem stat on any later turn.
 check(
     "patch 005 reads state inside the first-message guard, not on every turn",
-    patch_text.index("has_any_sessions") < patch_text.index("_sq_state_path"),
+    patch_text.index("has_any_sessions") < patch_text.index("_sq_state ="),
 )
 check(
     "patch 005 guards every append site (3 of them)",
@@ -1562,7 +1562,7 @@ check(
 )
 check(
     "it uses upstream's own persistence API rather than hand-writing config",
-    "_sq_persist_home(_sq_home)" in patch_text,
+    "persist_home_channel(_sq_home)" in patch_text,
 )
 check(
     "adoption is gated on this being a Squire tenant",
