@@ -326,3 +326,21 @@ The source archives remain unchanged. Output SHA256:
 `9ebae9649509585eedf496e898283195e439ea75cf05fa9b277243f70902edb7`.
 This proves offline transformation behavior, not production identity mapping or
 permission to start a migrated runtime. Code is recorded in commit `6226714`.
+
+
+### Model-accounting CI harness correction
+
+At `215d026`, control and runtime CI passed; pilot acceptance reached all six
+successful service builds but its accounting proxy could not bind fixed port
+58748 on the runner. The process had exited, but the harness retried readiness
+until timeout and cleanup masked the original error. The test harness now uses
+OS-assigned ports and inherits a continuously reserved dual-stack listener through
+CLI migrations, detects terminal child exit immediately, and safely reaps exited
+or unresponsive children. Production listener behavior is unchanged and remains
+covered by its IPv4/IPv6 test.
+
+All 22 proxy tests passed. An actual local proxy/Prisma/accounting run also passed
+while ports 58747 and 58748 were deliberately occupied: three synthetic requests,
+shared team spend 11.52, subsequent 429 budget denial, output capped at 8192,
+no persisted prompt bodies, and zero paid provider calls. CI is rerun for this
+harness-only correction; there is no production redeployment for it.
