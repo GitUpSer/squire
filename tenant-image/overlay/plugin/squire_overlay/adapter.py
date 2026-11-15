@@ -15,6 +15,7 @@ from .store import Store
 from .client import Broker
 
 _current_event=contextvars.ContextVar("squire_event",default=None)
+_final_send=contextvars.ContextVar("squire_final_send",default=False)
 
 
 def model_configured(config):
@@ -64,6 +65,13 @@ class SquireAdapter(BasePlatformAdapter):
                 await asyncio.sleep(1);continue
             envelope=self.store.claim()
             if not envelope:await asyncio.sleep(.25);continue
+            if envelope["event_id"].startswith("approval:"):
+                try:
+                    authorized=await asyncio.to_thread(self.broker.request,"GET","/v1/approvals",timeout=3)
+                    if envelope["event_id"][9:] not in {item["approval_id"] for item in authorized.get("approvals",[])}:
+                        self.store.cancel(envelope["event_id"]);continue
+                except Exception:
+                    self.store.defer(envelope["event_id"]);await asyncio.sleep(3);continue
             payload=envelope["payload"]
             source=self.build_source(chat_id=self.scope.conversation_id,chat_name="Private Squire" if self.scope.kind=="dm" else "Approved group",chat_type=self.scope.kind,user_id=envelope["sender_id"],message_id=envelope["provider_message_id"])
             text=payload.get("text","")
@@ -73,20 +81,53 @@ class SquireAdapter(BasePlatformAdapter):
             token=_current_event.set(event);self._completion=asyncio.Event()
             try:
                 if payload.get("media"):
-                    # Opaque media capabilities are never treated as a caller-supplied URL/path.
-                    # Text-only pilot rejects unsupported content visibly, without model/tool work.
-                    await self.send(source.chat_id,"This pilot currently accepts text messages. Please send the relevant text from that attachment.")
-                    self.store.finish(envelope["event_id"],True);continue
+                    from .media import attach
+                    from .client import BrokerError
+                    try:
+                        await asyncio.to_thread(attach,self.broker,self.scope,event,payload["media"])
+                    except BrokerError as exc:
+                        if exc.status in {429,500,502,503,504}:
+                            self.store.defer(envelope["event_id"]);await asyncio.sleep(3);continue
+                        await self.send(source.chat_id,"I couldn’t retrieve that attachment. Please resend it; the pilot accepts files up to 10 MB and retrieves them within 24 hours.")
+                        self.store.finish(envelope["event_id"],True);continue
                 await self.handle_message(event)
                 if not event._gateway_accepted:
                     self.store.finish(envelope["event_id"],False)
                 else:
-                    await self._completion.wait()
+                    await self._await_completion(event)
             except asyncio.CancelledError:raise
             except Exception:
                 self.store.finish(envelope["event_id"],False)
             finally:
                 _current_event.reset(token);self._completion=None
+
+    async def _await_completion(self,event):
+        # Ordinary turns stay FIFO. Owner control replies must reach Hermes while
+        # an action waits for approval/clarification, or both sides deadlock.
+        while not self._completion.is_set():
+            if self.scope.kind=="dm":
+                clarify=False
+                try:
+                    from tools.clarify_gateway import get_pending_for_session
+                    clarify=get_pending_for_session(self._event_session_key(event),include_choice_prompts=True) is not None
+                except ImportError:pass
+                def is_control(envelope):
+                    text=envelope["payload"].get("text","").strip()
+                    command=text.split(maxsplit=1)[0].lower() if text else ""
+                    return command in {"/approve","/deny","/stop","/cancel"} or clarify
+                control=self.store.claim_control(is_control)
+                if control:
+                    source=self.build_source(chat_id=self.scope.conversation_id,chat_type="dm",user_id=control["sender_id"],message_id=control["provider_message_id"])
+                    reply=MessageEvent(text=control["payload"].get("text",""),source=source,message_id=control["event_id"],metadata={"squire_event_id":control["event_id"],"squire_provider_message_id":control["provider_message_id"]})
+                    token=_current_event.set(reply)
+                    try:
+                        await self.handle_message(reply)
+                        # The inline control path does not fire processing hooks.
+                        if not reply._gateway_accepted:self.store.finish(control["event_id"],True)
+                    except Exception:self.store.finish(control["event_id"],False)
+                    finally:_current_event.reset(token)
+            try:await asyncio.wait_for(self._completion.wait(),timeout=.2)
+            except asyncio.TimeoutError:pass
 
     async def on_processing_complete(self,event,outcome):
         self.store.finish(event.metadata.get("squire_event_id",event.message_id),outcome==ProcessingOutcome.SUCCESS)
@@ -107,24 +148,68 @@ class SquireAdapter(BasePlatformAdapter):
             except Exception:pass  # Dependency unavailable: retain state, never invent approval.
             await asyncio.sleep(15)
 
-    async def send(self,chat_id,content,reply_to=None,metadata=None):
+    async def send(self,chat_id,content,reply_to=None,metadata=None,*,_media=None):
         if str(chat_id)!=self.scope.conversation_id:return SendResult(success=False,error="destination outside runtime scope",error_kind="forbidden")
-        if not content:return SendResult(success=True,message_id="empty")
+        if not content and not _media:return SendResult(success=True,message_id="empty")
         event=_current_event.get();event_id=event.metadata.get("squire_event_id") if event else None
         if event_id:
             ordinal=self._send_counts.get(event_id,0);self._send_counts[event_id]=ordinal+1
             key="event:"+event_id+":"+str(ordinal)
         else:
-            # Standalone cron sends are durably queued once by the caller. Provider retries
-            # use this response key; callers must not rerun unknown scheduled side effects.
-            import uuid
-            key="scheduled:"+str(uuid.uuid4())
+            from .scheduled import response_key
+            identity=str(content)+(":"+hashlib.sha256(_media["data_base64"].encode()).hexdigest() if _media else "")
+            key=response_key(identity)
+            if not key:
+                operation=os.environ.get("SQUIRE_OUTBOUND_OPERATION_ID")
+                if metadata and metadata.get("job_id"):
+                    return SendResult(success=False,error="scheduled delivery identity missing",error_kind="invalid")
+                if operation:
+                    key="operation:"+hashlib.sha256((operation+":"+str(content)).encode()).hexdigest()
+                else:
+                    import uuid
+                    key="adhoc:"+str(uuid.uuid4())
         payload={"conversation_id":self.scope.conversation_id,"response_key":key,"text":str(content)[:32000],"priority":"interactive" if event_id else "scheduled"}
+        if _media:payload["media"]=_media
         if event_id and not event_id.startswith("approval:"):payload["cause_event_id"]=event_id
-        if event and event.metadata.get("squire_approval_id"):payload["_approval_id"]=event.metadata["squire_approval_id"]
+        if event and event.metadata.get("squire_approval_id") and _final_send.get() and not _media:payload["_approval_id"]=event.metadata["squire_approval_id"]
         if reply_to and event:payload["reply_to"]=event.metadata.get("squire_provider_message_id",reply_to)
         self.store.enqueue(payload)
         return SendResult(success=True,message_id=key)
+
+    async def _send_file(self,chat_id,path,kind,caption=None,reply_to=None,metadata=None,file_name=None):
+        import base64
+        import mimetypes
+        from pathlib import Path
+        safe=self.validate_media_delivery_path(str(path))
+        if not safe:return SendResult(success=False,error="attachment path rejected",error_kind="invalid")
+        file=Path(safe)
+        try:
+            if not file.is_file() or file.stat().st_size>10*1024*1024:return SendResult(success=False,error="attachment exceeds pilot size limit",error_kind="invalid")
+            with file.open("rb") as stream:body=stream.read(10*1024*1024+1)
+            if len(body)>10*1024*1024:return SendResult(success=False,error="attachment exceeds pilot size limit",error_kind="invalid")
+        except OSError:return SendResult(success=False,error="attachment unavailable",error_kind="invalid")
+        mime=mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        if kind=="audio" and file.suffix.lower()==".ogg":mime="audio/ogg"
+        name=Path(file_name or file.name).name.replace("\\","_")[:160] or "attachment"
+        media={"data_base64":base64.b64encode(body).decode(),"mime_type":mime,"filename":name,"media_type":kind,"ptt":kind=="audio" and mime=="audio/ogg"}
+        return await self.send(chat_id,caption or "",reply_to,metadata,_media=media)
+
+    async def send_image_file(self,chat_id,image_path,caption=None,reply_to=None,metadata=None,**kwargs):
+        return await self._send_file(chat_id,image_path,"image",caption,reply_to,metadata)
+
+    async def send_voice(self,chat_id,audio_path,caption=None,reply_to=None,metadata=None,**kwargs):
+        return await self._send_file(chat_id,audio_path,"audio",caption,reply_to,metadata)
+
+    async def send_video(self,chat_id,video_path,caption=None,reply_to=None,metadata=None,**kwargs):
+        return await self._send_file(chat_id,video_path,"video",caption,reply_to,metadata)
+
+    async def send_document(self,chat_id,file_path,caption=None,file_name=None,reply_to=None,metadata=None,**kwargs):
+        return await self._send_file(chat_id,file_path,"document",caption,reply_to,metadata,file_name)
+
+    async def send_final_ledgered(self,*args,**kwargs):
+        token=_final_send.set(True)
+        try:return await super().send_final_ledgered(*args,**kwargs)
+        finally:_final_send.reset(token)
 
     async def get_chat_info(self,chat_id):
         if str(chat_id)!=self.scope.conversation_id:raise ValueError("destination outside runtime scope")
@@ -136,8 +221,14 @@ class SquireAdapter(BasePlatformAdapter):
 
 
 async def standalone_send(config,chat_id,message,*,thread_id=None,media_files=None,force_document=False):
-    if media_files:return {"error":"Squire pilot supports text output only"}
     adapter=SquireAdapter(config)
     result=await adapter.send(chat_id,message)
-    if result.success:await asyncio.to_thread(adapter.broker.flush,adapter.store)
-    return {"success":result.success,"message_id":result.message_id} if result.success else {"error":result.error}
+    if not result.success:return {"error":result.error}
+    from pathlib import Path
+    for path,is_voice in media_files or []:
+        suffix=Path(path).suffix.lower()
+        kind="document" if force_document else "audio" if is_voice or suffix in {".ogg",".mp3",".m4a",".wav"} else "image" if suffix in {".jpg",".jpeg",".png",".webp",".gif"} else "video" if suffix in {".mp4",".mov",".webm"} else "document"
+        result=await adapter._send_file(chat_id,path,kind)
+        if not result.success:return {"error":result.error}
+    await asyncio.to_thread(adapter.broker.flush,adapter.store)
+    return {"success":True,"message_id":result.message_id}

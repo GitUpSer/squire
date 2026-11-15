@@ -798,7 +798,7 @@ def notify_owner_connected(provider: str, hermes_home: str | None = None) -> boo
         result = subprocess.run(
             [hermes_bin, "send", "--to", f"{'squire' if os.environ.get('SQUIRE_RUNTIME_ID') else 'telegram'}:{chat_id}", text],
             capture_output=True, timeout=30, check=False,
-            env=_send_env(hermes_home),
+            env={**_send_env(hermes_home), "SQUIRE_OUTBOUND_OPERATION_ID": f"provider-connected:{provider}"},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _record_celebration_failure(hermes_home, f"{type(exc).__name__}: {exc}")

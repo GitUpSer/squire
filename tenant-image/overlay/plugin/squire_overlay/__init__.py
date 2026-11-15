@@ -12,6 +12,9 @@ GROUP_TOOLS=frozenset({"memory","squire_request_private_action"})
 def register(ctx):
     if not os.environ.get("SQUIRE_RUNTIME_ID"):return  # Legacy Telegram stays on its existing path.
     scope=RuntimeConfig.from_env();store=Store(scope.database)
+    if scope.kind=="dm":
+        from .guardrails.policy import register as register_guardrails
+        register_guardrails(ctx)
     from .adapter import SquireAdapter,standalone_send
     registration=ctx.register_platform("squire","Squire",SquireAdapter,lambda:True,
         validate_config=lambda _:bool(os.environ.get("SQUIRE_RUNTIME_ID")),
@@ -24,6 +27,15 @@ def register(ctx):
     if registration is None:raise RuntimeError("Squire platform registration rejected")
 
     def pre_tool(tool_name,args=None,tool_call_id="",**kwargs):
+        active=store.active_event()
+        if active and active.startswith("approval:"):
+            from .client import Broker
+            try:
+                authorized=Broker(scope).request("GET","/v1/approvals",timeout=3)
+                if active[9:] not in {item["approval_id"] for item in authorized.get("approvals",[])}:
+                    return {"action":"block","message":"The owner's private-action approval is no longer active."}
+            except Exception:
+                return {"action":"block","message":"Current approval could not be verified; no private action is authorized."}
         if scope.kind=="group" and tool_name not in GROUP_TOOLS:
             return {"action":"block","message":"This group agent cannot access private accounts, files, browsers, shells or external destinations. Request an owner-approved private action instead."}
         if store.tool_start(tool_name,args or {},tool_call_id) is False:

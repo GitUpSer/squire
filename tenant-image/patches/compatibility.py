@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, patch
 
 PATCHES=Path(__file__).resolve().parent
 FILES=("gateway/run.py","gateway/run_turn.py","gateway/run_shutdown.py",
-       "plugins/platforms/telegram/adapter.py","agent/anthropic_adapter.py","utils.py")
+       "plugins/platforms/telegram/adapter.py","agent/anthropic_adapter.py","utils.py",
+       "cron/scheduler_delivery.py")
 
 
 def tree(root,file):return ast.parse((root/file).read_text())

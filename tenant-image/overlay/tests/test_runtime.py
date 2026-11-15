@@ -111,3 +111,60 @@ async def test_real_adapter_processing_completion_and_scoped_outbox(hermes,scope
     assert payload["text"]=="A real adapter reply"
     result=await adapter.send("another-conversation","wrong recipient")
     assert not result.success
+
+
+@pytest.mark.asyncio
+async def test_owner_approval_can_resolve_while_turn_waits(hermes,scope,monkeypatch):
+    from squire_overlay.adapter import SquireAdapter
+    from gateway.config import PlatformConfig
+    adapter=SquireAdapter(PlatformConfig());approved=asyncio.Event();seen=[]
+    monkeypatch.setattr(adapter.broker,"flush",lambda store:False)
+    monkeypatch.setattr(adapter.broker,"request",lambda *args,**kwargs:{"approvals":[]})
+    async def handler(message):
+        seen.append(message.text)
+        if message.text=="/approve":approved.set();return "Approved"
+        await asyncio.wait_for(approved.wait(),3)
+        return "Action completed"
+    adapter.set_message_handler(handler)
+    adapter.store.accept([event(scope)],scope)
+    await adapter.connect()
+    try:
+        for _ in range(40):
+            if seen:break
+            await asyncio.sleep(.05)
+        approval=event(scope,"approval-command");approval["payload"]["text"]="/approve"
+        adapter.store.accept([approval],scope)
+        for _ in range(100):
+            with adapter.store.db() as db:states=[row[0] for row in db.execute("SELECT state FROM inbox ORDER BY sequence")]
+            if states==["done","done"]:break
+            await asyncio.sleep(.05)
+        assert states==["done","done"]
+        assert seen==["Hello","/approve"]
+    finally:await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_revoked_queued_approval_never_reaches_model(hermes,scope,monkeypatch):
+    from squire_overlay.adapter import SquireAdapter
+    from gateway.config import PlatformConfig
+    adapter=SquireAdapter(PlatformConfig());seen=[]
+    monkeypatch.setattr(adapter.broker,"flush",lambda store:False)
+    monkeypatch.setattr(adapter.broker,"request",lambda *args,**kwargs:{"approvals":[]})
+    async def handler(message):seen.append(message);return "Must not run"
+    adapter.set_message_handler(handler)
+    adapter.store.accept([event(scope,"approval:revoked")],scope)
+    await adapter.connect()
+    try:
+        for _ in range(40):
+            with adapter.store.db() as db:state=db.execute("SELECT state FROM inbox").fetchone()[0]
+            if state=="cancelled":break
+            await asyncio.sleep(.05)
+        assert state=="cancelled" and not seen
+    finally:await adapter.disconnect()
+
+
+@pytest.mark.parametrize("timestamp",[None,"tomorrow",float("nan"),float("inf"),True,-1,253402300800])
+def test_malformed_timestamp_cannot_poison_ordered_runtime(scope,timestamp):
+    payload=event(scope);payload["timestamp"]=timestamp
+    with pytest.raises(ScopeError):Store(scope.database).accept([payload],scope)
+    assert Store(scope.database).claim() is None

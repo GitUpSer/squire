@@ -1,6 +1,7 @@
 """Commit-before-ack inbox and outbox; never repeat uncertain agent/tool execution."""
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import time
@@ -55,9 +56,14 @@ class Store:
                 if not isinstance(event,dict) or set(event)!=allowed: raise ScopeError("invalid event shape")
                 if (event["conversation_id"],event["tenant_id"],event["runtime_id"],event["chat_type"])!=(config.conversation_id,config.tenant_id,config.runtime_id,config.kind): raise ScopeError("event outside runtime scope")
                 if any(not isinstance(event[key],str) or not 1<=len(event[key])<=200 for key in ("event_id","sender_id","provider_message_id")): raise ScopeError("invalid event identity")
+                timestamp=event["timestamp"]
+                if isinstance(timestamp,bool) or not isinstance(timestamp,(float,int)) or not math.isfinite(timestamp) or not 0<=timestamp<=253402300799:
+                    raise ScopeError("invalid event timestamp")
                 payload=event["payload"]
                 if not isinstance(payload,dict) or set(payload)-{"text","reply_to","mentions","media"}: raise ScopeError("invalid event payload")
                 if not isinstance(payload.get("text",""),str) or len(payload.get("text",""))>32000: raise ScopeError("invalid text")
+                if payload.get("reply_to") is not None and (not isinstance(payload["reply_to"],str) or len(payload["reply_to"])>200):raise ScopeError("invalid reply identity")
+                if "mentions" in payload and (not isinstance(payload["mentions"],list) or len(payload["mentions"])>100 or any(not isinstance(item,str) or len(item)>200 for item in payload["mentions"])):raise ScopeError("invalid mentions")
                 encoded=json.dumps(event,sort_keys=True,separators=(",",":"));fingerprint=hashlib.sha256(encoded.encode()).hexdigest()
                 previous=db.execute("SELECT fingerprint FROM inbox WHERE event_id=?",(event["event_id"],)).fetchone()
                 if previous:
@@ -84,6 +90,23 @@ class Store:
             if not row:return None
             db.execute("UPDATE inbox SET state='running',started=? WHERE event_id=?",(time.time(),row[0]))
             return json.loads(row[1])
+
+    def claim_control(self,predicate):
+        """Owner control replies may resolve an approval while its turn is waiting."""
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for row in db.execute("SELECT event_id,payload FROM inbox WHERE state='pending' ORDER BY sequence"):
+                payload=json.loads(row[1])
+                if predicate(payload):
+                    db.execute("UPDATE inbox SET state='running',started=? WHERE event_id=?",(time.time(),row[0]))
+                    return payload
+        return None
+
+    def cancel(self,event_id):
+        with self.db() as db:db.execute("UPDATE inbox SET state='cancelled',finished=? WHERE event_id=?",(time.time(),event_id))
+
+    def defer(self,event_id):
+        with self.db() as db:db.execute("UPDATE inbox SET state='pending',started=NULL WHERE event_id=? AND state='running'",(event_id,))
 
     def finish(self,event_id,success):
         with self.db() as db:
@@ -125,7 +148,7 @@ class Store:
 
     def active_event(self):
         with self.db() as db:
-            row=db.execute("SELECT event_id FROM inbox WHERE state='running' LIMIT 1").fetchone()
+            row=db.execute("SELECT event_id FROM inbox WHERE state='running' ORDER BY sequence LIMIT 1").fetchone()
             return row[0] if row else None
 
     def tool_start(self,tool_name,args,call_id):

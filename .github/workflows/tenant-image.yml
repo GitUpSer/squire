@@ -145,6 +145,14 @@ jobs:
       - name: Verify patches against actual pinned source
         run: python3 tenant-image/patches/compatibility.py .upstream/hermes
 
+      - name: Verify scoped runtime adapter against actual pinned source
+        env:
+          HERMES_SOURCE: ${{ github.workspace }}/.upstream/hermes
+        run: |
+          python -m pip install -r tenant-image/overlay/requirements-test.lock
+          python -m pip install --no-deps -e tenant-image/overlay/plugin
+          python -m pytest tenant-image/overlay/tests -q --disable-warnings --maxfail=2
+
       # Same graceful-skip contract as the build job: this workflow must not go
       # red on a branch where tenant-image/ is still a placeholder.
       - name: Check tenant-image/ is populated

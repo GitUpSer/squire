@@ -3,6 +3,11 @@
 !Dockerfile
 !.dockerignore
 !supervisord.conf
+!browser/
+!browser/package.json
+!browser/package-lock.json
+!browser/harden.py
+!browser/smoke.py
 !bin/
 !bin/**
 !home-template/

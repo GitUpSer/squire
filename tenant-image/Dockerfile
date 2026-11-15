@@ -331,6 +331,37 @@ RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-deps /
  && chmod 0644 /etc/hermes/config.yaml \
  && /opt/hermes/.venv/bin/python /opt/squire/overlay/gate/contract.py
 
+# Founder browser parity: exact source Camofox package + dependency lock + browser.
+# Browser cookies are NOT baked in. The supervised private-runtime process uses
+# tmpfs state with an encrypted volume checkpoint; group runtimes never start it.
+COPY browser/package.json browser/package-lock.json browser/harden.py browser/smoke.py /opt/squire/browser-build/
+RUN test "$(dpkg --print-architecture)" = amd64 \
+ && node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' \
+ && apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+      libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 \
+      libegl1 libgl1-mesa-dri libgbm1 xvfb unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /opt/squire/camofox /opt/squire/camoufox \
+ && curl --fail --location --retry 3 https://registry.npmjs.org/@askjo/camofox-browser/-/camofox-browser-1.11.2.tgz -o /tmp/camofox.tgz \
+ && echo 'f892430edfa42acd0186d082b2930dcbcad3ccc01064b55af8bf47b836e99387  /tmp/camofox.tgz' | sha256sum --check - \
+ && tar -xzf /tmp/camofox.tgz --strip-components=1 -C /opt/squire/camofox \
+ && cp /opt/squire/browser-build/package-lock.json /opt/squire/camofox/package-lock.json \
+ && cd /opt/squire/camofox \
+ && npm ci --omit=dev --ignore-scripts \
+ && npm rebuild better-sqlite3 \
+ && /opt/squire/venv/bin/python /opt/squire/browser-build/harden.py /opt/squire/camofox \
+ && curl --fail --location --retry 3 https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.x86_64.zip -o /tmp/camoufox.zip \
+ && echo '61e1ec455e021720af38a5cc5ff7566121363cb5b82b72f24e381ba2676a4888  /tmp/camoufox.zip' | sha256sum --check - \
+ && (unzip -q /tmp/camoufox.zip -d /opt/squire/camoufox; status=$?; test "$status" -le 1) \
+ && test -f /opt/squire/camoufox/camoufox-bin \
+ && printf '%s\n' '{"version":"135.0.1","release":"beta.24"}' > /opt/squire/camoufox/version.json \
+ && chmod -R a+rX /opt/squire/camofox /opt/squire/camoufox \
+ && chmod 0755 /opt/squire/camoufox/camoufox /opt/squire/camoufox/camoufox-bin \
+ && rm /tmp/camofox.tgz /tmp/camoufox.zip
+ENV CAMOUFOX_EXECUTABLE=/opt/squire/camoufox/camoufox-bin
+RUN runuser -u hermes -- /opt/squire/venv/bin/python /opt/squire/browser-build/smoke.py
+
 # ---------------------------------------------------------------------------
 # 4. Squire runtime files
 # ---------------------------------------------------------------------------
