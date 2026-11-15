@@ -147,9 +147,60 @@ source host `authorized_keys`, or old agent credentials wholesale. The source
 `/home/hermes/kalshi-bot/data`; it is recorded as an omission, not fabricated.
 
 The source Hindsight packages are API 0.5.0 / slim 0.5.2 with PostgreSQL 18.1,
-vector 0.8.1 and Alembic revision `h3i4j5k6l7m8`. The target's Hindsight 0.9.0
-requires a rehearsed forward schema upgrade and recall comparison before
-the memory-parity gate can pass.
+vector 0.8.1 and Alembic revision `h3i4j5k6l7m8`. **Do not upgrade the founder
+to Hindsight 0.9.0 automatically.** The actual isolated restore rehearsal found
+that migration `h3c4d5e6f7g8` deletes 2,712 observation memories: memory rows
+drop from 14,324 to 11,612. No surviving fact content changes, but those derived
+observations cease to participate in recall. Opinion-deleting migrations are
+also present, although this source has no affected opinion rows.
+
+The compatible founder image pins slim 0.5.2, pg0-embedded 0.12.3, and the
+existing local `BAAI/bge-small-en-v1.5` embeddings at dimension 384. The
+matching-version migration-only rehearsal reached its existing sole head with
+all core content hashes and counts unchanged. New customer runtimes can retain
+0.9.0. Equal embedding dimensions do not imply compatible vector spaces: never
+silently switch this founder's existing vectors to another embedding model.
+
+`pilot_restore_drill.py` restores checksum-verified dumps only into the explicit
+disposable Railway restore service and never overwrites an existing database.
+`pilot_hindsight_upgrade.py` verifies pinned wheel hashes, runs only migration
+modules (no API/model/worker startup), checks exact heads and compares memory
+content hashes. Its 0.9.0 check correctly fails on the observation loss.
+`pilot_hindsight_archive.py` preserves every old table in the isolated upgraded
+database's `legacy_v052` schema and proves all original memory hashes survive
+there; an archive is not equivalent to active recall parity.
+
+Before starting a restored daemon, use `pilot_hindsight_pending.py` to inspect
+only async-operation status/type counts. The rehearsal's 6,990 operations were
+all terminal: 6,766 completed and 224 failed, with zero pending or processing.
+Keep `HINDSIGHT_API_WORKER_ENABLED=false` during restore and private-runtime
+verification; the pinned 0.5.2 API explicitly skips worker startup under that
+setting. Do not call retain/consolidation endpoints during verification. The
+gateway, cron scheduler and recovery watchdog must also remain fenced.
+
+Recheck the final fenced dump. If it contains pending, processing or unknown
+statuses, preserve the original rows/payloads and keep the worker disabled.
+Create a private operation-ID reconciliation map against the source completion
+ledger before any explicit resume. Do not bulk-delete tasks, mark them completed,
+or silently requeue them to make the readiness gate pass. Only after source
+fencing, final import and queue reconciliation may the founder worker be
+enabled; historical failed rows are retained and are not retried automatically.
+
+The rehearsal restored PostgreSQL control/messaging/LiteLLM databases with
+17/16/68 tables respectively, plus all 15 founder Hindsight tables. Package
+installation upgraded the disposable server libraries; a separately started,
+matching PostgreSQL 18.7 process on loopback port 55432 avoided mixing old
+server binaries with new libraries. Session-only parallel-index settings avoid
+the container's 64 MiB shared-memory limit. The rehearsal extension was vector
+0.8.7, so the final founder image still needs its own embedded PostgreSQL and
+runtime recall checks. No production database or original agent was modified.
+
+For existing rehearsal archives, `pilot_integration_backup.py source-modes`
+creates a separately encrypted, checksum-bound source permission inventory.
+Only restore the owner execute bit for approved script files whose bytes match
+that inventory; keep credentials private. Final snapshots include source mode
+metadata directly. Changing live files require a fresh final fenced snapshot,
+not a claim that an earlier rehearsal contains later writes.
 
 ### Daily production backups
 

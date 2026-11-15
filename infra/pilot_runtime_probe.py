@@ -25,6 +25,10 @@ while pending:
                                     capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 record["runtime"] = json.loads(result.stdout)
+            packages = subprocess.run([str(interpreter), "-c", "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']:d.version for d in m.distributions() if d.metadata['Name'].lower() in {'hindsight-client','hermes-agent'}}))"],
+                                      capture_output=True, text=True, timeout=10)
+            if packages.returncode == 0:
+                record["packages"] = json.loads(packages.stdout)
         print(json.dumps(record), flush=True)
         children = (proc / "task" / str(current) / "children").read_text().split()
         pending.extend((int(child), depth + 1) for child in children)
