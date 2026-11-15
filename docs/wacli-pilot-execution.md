@@ -27,7 +27,7 @@ Required frontend DNS records:
 | control-db | `95df0541-8270-4e39-a84e-91e5942c8400` | Database deployment SUCCESS |
 | messaging-db | `ebf57ca6-0e7c-426d-98fd-2e38cdb42b8d` | Database deployment SUCCESS |
 | litellm-db | `b9520966-65e9-4931-a98b-42c65758de7a` | Database deployment SUCCESS |
-| control-api | `e6f51482-3db5-423f-8d76-3a1db48c0641` | SUCCESS; admission closed; follow-up fixes awaiting redeploy |
+| control-api | `e6f51482-3db5-423f-8d76-3a1db48c0641` | SUCCESS; admission closed; reviewed control v4 deployed |
 | control-worker | `c5e4b1e8-4fa6-47e8-a6f7-ad1bdfb4ce3e` | SUCCESS; processing disabled |
 | messaging-api | `e2471ffb-9747-4e48-8359-9f656a6e3d3c` | SUCCESS; explicit pre-deploy migration |
 | messaging-worker | `bdf3a124-3bc3-4c80-befd-fd1f171f9dff` | SUCCESS; outbound disabled |
@@ -35,16 +35,16 @@ Required frontend DNS records:
 | wacli-transport | `880eca27-7b70-4b62-adf8-e84e465e2bf3` | SUCCESS; pairing mode; outbound disabled |
 | app-web | `db10d96a-e7f4-4255-ac94-4c03b0590644` | SUCCESS; HTTPS 200; operator API paths 404 |
 
-Verified deployment IDs: control API `a4ce6351-a8e5-4d04-92eb-9e4be6eed836`,
+Initial deployment IDs (superseded by the verification update below): control API `a4ce6351-a8e5-4d04-92eb-9e4be6eed836`,
 control worker `e70dec68-6bf1-4de3-84b0-a26f5deb6fbd`, messaging API
 `201e2828-7459-4b3f-a31f-847e64940d3c`, messaging worker
 `46e37af0-5530-4df8-b385-bdc2d573109b`, proxy
 `e20cfe49-5078-4c99-948e-44ca1f91fd09`, frontend
 `0077bde3-28af-40af-a6c0-740148c3e4e4`. These are initial disabled deployments;
-subsequent review fixes must be redeployed before activation.
+subsequent review fixes are recorded below.
 
 Transport volume `588bc84f-7697-4466-84ad-0e3a671aa28c`: 5120 MB at `/data`,
-us-west2, one replica, no sleeping, no deployment overlap. Current healthy
+us-west2, one replica, no sleeping, no deployment overlap. Initial healthy
 transport deployment: `5136e9e0-7e40-4ebf-943f-244c3550f47b`; source manifest SHA256
 `15cc06a37fbd0f182cb699d9a8ac75d9848a12423ae61c77e18a0f4852957846`.
 SSH confirmed IPv4 health and volume ownership (UID 10001). Pairing mode keeps
@@ -146,11 +146,13 @@ Tests that require sockets need the appropriate sandbox network permission.
 
 ## Outstanding release gates
 
-Runtime adapter and compatible image; cross-service behavior and concurrency
-tests; independent code review; immutable build/deployment IDs; configured
-production databases, model proxy and email; restore rehearsal; phone pairing;
-founder migration and rollback drill; fresh customer website signup and actual
-WhatsApp receipt; approved group isolation; founder soak and staged admission.
+Private registry pull credentials and a valid service-funded model key; actual
+runtime canary with restored founder data; phone pairing; final fenced founder
+snapshot, migration and rollback drill; fresh customer website signup and actual
+WhatsApp receipt; live approved-group isolation; founder soak and staged admission.
+Implementation, independent review, synthetic acceptance, image build gates,
+production databases/email, and archive restore rehearsals have passed the
+checks recorded below. These do not replace the remaining live gates.
 
 References: [Resend verified domains](https://resend.com/docs/dashboard/domains/introduction),
 [sending-only API keys](https://resend.com/docs/api-reference/api-keys/create-api-key).
@@ -158,13 +160,13 @@ References: [Resend verified domains](https://resend.com/docs/dashboard/domains/
 ## Verification update: deployed pilot services and migration rehearsal
 
 Commit `51bbc0c` records the signup, lifecycle, scoped messaging, transport,
-backup tooling, and browser acceptance harness. Runtime follow-up `9e55ac3`
-fixes the public Camoufox archive font path; its image build is pending.
+backup tooling, and browser acceptance harness. Runtime build rc7 and the latest
+CI results are recorded below.
 
 Latest verified production deployments (all SUCCESS):
 
-- Control API `ada294f5-0ecc-48e0-97b2-e7f083783b18`; worker
-  `0e00274d-41ec-4d6f-a827-e06e186952b9`. Database revision 2 is verified.
+- Control API `f1a88f57-413a-4059-bab0-4b3f6b8fa1a1`; worker
+  `725e8bc4-ee6a-4c6b-b723-4c1a488ca91a`. Database revision 2 is verified.
   Admission, provisioning worker, and lifecycle worker remain disabled.
 - Messaging API `1d70cf11-4a77-45dc-940b-eafb6c4c1d23`; worker
   `60d4722b-1e34-48af-9e14-eb2004e8540a`. Outbound remains disabled.
@@ -173,7 +175,7 @@ Latest verified production deployments (all SUCCESS):
 - Web `72c1cd25-bb45-4a2c-b77e-56768aa220ca`; public HTTPS returns 200 and
   the operator route returns 404.
 
-Current checks: control 275 passed including PostgreSQL races; messaging 32
+Current checks: control 277 passed including PostgreSQL races; messaging 32
 passed against PostgreSQL; transport 19 passed including pinned wacli and both
 loopback address families. The browser acceptance harness passed two signups,
 first outbound phone challenges, independent runtime/backup capabilities,
@@ -192,9 +194,9 @@ seven SQLite integrity checks. All three service PostgreSQL archives restored
 into a disposable service. The original Hindsight database also restored: one
 bank, 14,324 memory units, 1,132 documents, and 5,228 entities. However, a real
 0.9 upgrade rehearsal removed 2,712 memory records. Its preservation gate
-correctly failed; no founder cutover is authorized by this evidence. Determine
-a compatible memory runtime or a separately validated preservation strategy
-before promotion. Matching embedding dimensions alone is insufficient: source
+correctly failed. The matching-version founder variant described below preserves
+these records in the database rehearsal; restored-image canary and recall checks
+remain required before cutover. Matching embedding dimensions alone is insufficient: source
 embeddings use local BAAI/bge-small-en-v1.5 (384 dimensions), with RRF reranking.
 
 The source agent remains running. Private package pull credentials, a valid
@@ -230,3 +232,38 @@ PostgreSQL/browser/model-accounting suite and all six service image builds.
 Runtime image candidates rc3 and rc4 failed the actual browser build gate;
 font-resource mapping and an upstream missing `await` were identified. A new
 image candidate must pass before any tenant image is promoted.
+
+
+## Verified runtime release and current CI
+
+Tag `tenant-pilot-v0.4.0-rc7`, commit
+`bf8ed3d2d4cda03d48b59b1cbc4214adb07c2f14`, passed build run
+[43762913671](https://github.com/GitUpSer/squire/actions/runs/43762913671).
+Both variants launched the actual embedded memory service with Hermes client
+0.10.3 and passed HTTP health, bank creation, empty recall, and deletion. Both
+also launched Camofox 1.11.2 / Firefox 135 beta.24 and passed the actual page and
+snapshot check. This is synthetic image verification, not restored-memory recall
+parity or a deployed tenant canary.
+
+Immutable image references in `ghcr.io/gitupser/squire/hermes-tenant-pilot`:
+
+| Use | Digest |
+| --- | --- |
+| New customers and groups | `sha256:071a77c0a2fd5b2720b6d082a8b47bcc258f4890974f461fc2737bba810572ea` |
+| Imported founder DM, matching Hindsight 0.5.2 | `sha256:8570bd6a9803c17c7b631815992782184f16889cd66dedb65e36da58ab3e1c25` |
+
+These are configured as `TENANT_IMAGE` and `PILOT_FOUNDER_IMAGE` on both control
+services, together with `PILOT_FOUNDER_BACKUP_BUCKET=pilot-founder-dm-backups`.
+Deployment was skipped, so the values take effect at the next deployment after
+registry credentials are installed. Provisioning and admission remain disabled.
+Registry visibility remains private; organization policy was not weakened.
+
+At commit `c17dfa41cde4c3e327378bc0b3f1f1a2b36d9aac`, all three workflows passed:
+[test](https://github.com/GitUpSer/squire/actions/runs/43763705672),
+[tenant-image checks](https://github.com/GitUpSer/squire/actions/runs/43763705585),
+and [pilot acceptance](https://github.com/GitUpSer/squire/actions/runs/43763705569).
+The latter includes all six service image builds and PostgreSQL/browser/model
+accounting acceptance. The tenant checks now include 34 migration/backup tests
+using actual pinned Hermes source and verified age tools. Local runtime and
+migration checks also passed, including restored-home adoption and source-mode
+preservation. No actual WhatsApp delivery has been tested yet.
