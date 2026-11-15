@@ -141,6 +141,16 @@ the same core `decrypt` command into a separate quarantine directory.
 
 These files may contain browser cookies and tool credentials. They belong only
 to the founder private runtime, never a group runtime or another customer.
+The current application-level envelope sealer covers `.env` and Hermes
+`auth.json`; the browser checkpoint separately covers its profiles, cookies,
+checkpoints, and private state. It does **not** automatically cover imported
+SSH keys, external CLI auth stores, or arbitrary `.config` files. An encrypted
+snapshot or transfer does not make their extracted runtime files
+application-encrypted. Reviewed encrypted transfer into the founder-only home
+with mode `0600` preserves the source's private-file baseline; record that
+storage choice explicitly. Use a reconnect procedure when safe transfer is not
+available. Do not label those private file copies as covered by the existing
+envelope sealer, and never promote them into group runtimes.
 Import each integration explicitly; do not restore the old systemd services,
 source host `authorized_keys`, or old agent credentials wholesale. The source
 `.hermes/scripts/data` link already points to an absent
@@ -237,6 +247,10 @@ the **primary** `state.db.gateway_routing` index, sessions source/origin/key
 columns, and the legacy `sessions/sessions.json` mirror. Pass the final
 runtime's absolute sessions directory as routing scope, not the temporary
 restore directory. This follows the pinned 9.24 `SessionPersistenceMixin`.
+The final runtime sets `HOME=HERMES_HOME=/opt/data`: selected source `.hermes`
+contents map directly into `/opt/data`, with routing scope `/opt/data/sessions`.
+Approved external browser state from source `.camofox` maps to
+`/opt/data/.camofox`; it is not nested beneath another `.hermes` directory.
 
 Each mapping includes `old_session_id`, `old_chat_jid`, `kind:"dm"`,
 `conversation_id`, and optional opaque `actor_id`. Verify mapping against
@@ -247,7 +261,7 @@ reviewed schema adapter. Run on a disposable **verified restored copy**:
 ```sh
 python3 infra/migrate_personal_agent.py remap-private --execute \
   --root /private/founder-rehearsal-restored --mapping /private/dm-map.json \
-  --runtime-sessions-dir /data/.hermes/sessions
+  --runtime-sessions-dir /opt/data/sessions
 ```
 
 Unselected sessions/messages are removed from this copied database. Pending

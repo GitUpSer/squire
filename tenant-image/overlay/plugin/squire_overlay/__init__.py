@@ -12,6 +12,8 @@ GROUP_TOOLS=frozenset({"memory","squire_request_private_action"})
 def register(ctx):
     if not os.environ.get("SQUIRE_RUNTIME_ID"):return  # Legacy Telegram stays on its existing path.
     scope=RuntimeConfig.from_env();store=Store(scope.database)
+    from .onboarding import context as onboarding_context
+    ctx.register_hook("pre_llm_call",onboarding_context)
     if scope.kind=="dm":
         from .guardrails.policy import register as register_guardrails
         register_guardrails(ctx)

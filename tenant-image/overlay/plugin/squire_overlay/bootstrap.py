@@ -41,6 +41,11 @@ def prepare():
     cfg.setdefault("plugins",{})["enabled"]=["squire-overlay"]
     cfg["plugins"]["disabled"]=[]
     cfg.setdefault("logging",{})["level"]="WARNING"
+    from .onboarding import prepare as prepare_onboarding
+    prepare_onboarding(home,atomic)
+    # Pilot onboarding is supplied by the supported plugin hook. Remove the
+    # legacy shell hook, whose provider-first sales flow is not the pilot.
+    cfg["hooks"]={}
     if scope.kind=="group":
         cfg["platform_toolsets"]={"squire":["memory","squire-group"]}
         cfg["mcp_servers"]={};cfg["skills"]={"external_dirs":[],"disabled":["*"]}

@@ -24,6 +24,8 @@ def set_runtime_variables(session,tenant,clients):
     private_provider=runtime.kind=="dm" and (tenant.connected_provider or (ent and ent.state=="imported_active"))
     if private_provider:
         variables.pop("ANTHROPIC_BASE_URL",None)
+    if ent and ent.state=="imported_active" and runtime.kind=="dm":
+        variables.update({"SQUIRE_RESTORED_HOME":"true","HERMES_SKIP_CONFIG_MIGRATION":"1"})
     if not tenant.trial_key_active and not private_provider:
         variables["ANTHROPIC_API_KEY"]=""
     if ent and ent.state=="imported_active" and runtime.kind=="dm" and s.pilot_founder_backup_bucket:

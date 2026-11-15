@@ -165,6 +165,8 @@ def test_group_runtime_does_not_receive_master_credentials(pilot):
         variables=clients.railway.set_variables.call_args.args[1]
         assert variables["SQUIRE_RUNTIME_KIND"]=="group"
         assert variables["SQUIRE_DISABLE_PRIVATE_TOOLS"]=="true"
+        assert "SQUIRE_RESTORED_HOME" not in variables
+        assert "HERMES_SKIP_CONFIG_MIGRATION" not in variables
         assert "INTERNAL_API_TOKEN" not in variables
         assert variables["ANTHROPIC_API_KEY"] == ""  # clear any revoked key on reused group runtime
         assert "SQUIRE_DEK" not in variables
@@ -282,6 +284,9 @@ def test_imported_founder_preserves_model_key_and_endpoint(pilot):
         variables=clients.railway.set_variables.call_args.args[1]
         assert "ANTHROPIC_API_KEY" not in variables
         assert "ANTHROPIC_BASE_URL" not in variables
+        assert variables["SQUIRE_RESTORED_HOME"]=="true"
+        assert variables["HERMES_SKIP_CONFIG_MIGRATION"]=="1"
+        assert "HINDSIGHT_API_WORKER_ENABLED" not in variables
         assert variables["SQUIRE_PRESERVE_LOCAL_EMBEDDINGS"]=="true"
         assert variables["HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL"]=="BAAI/bge-small-en-v1.5"
         assert variables["HINDSIGHT_API_RERANKER_PROVIDER"]=="rrf"
