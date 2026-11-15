@@ -154,3 +154,50 @@ WhatsApp receipt; approved group isolation; founder soak and staged admission.
 
 References: [Resend verified domains](https://resend.com/docs/dashboard/domains/introduction),
 [sending-only API keys](https://resend.com/docs/api-reference/api-keys/create-api-key).
+
+## Verification update: deployed pilot services and migration rehearsal
+
+Commit `51bbc0c` records the signup, lifecycle, scoped messaging, transport,
+backup tooling, and browser acceptance harness. Runtime follow-up `9e55ac3`
+fixes the public Camoufox archive font path; its image build is pending.
+
+Latest verified production deployments (all SUCCESS):
+
+- Control API `ada294f5-0ecc-48e0-97b2-e7f083783b18`; worker
+  `0e00274d-41ec-4d6f-a827-e06e186952b9`. Database revision 2 is verified.
+  Admission, provisioning worker, and lifecycle worker remain disabled.
+- Messaging API `1d70cf11-4a77-45dc-940b-eafb6c4c1d23`; worker
+  `60d4722b-1e34-48af-9e14-eb2004e8540a`. Outbound remains disabled.
+- Transport `5357d849-f25e-4fec-a67e-9cb0e1e029a3`; attachment and dedicated
+  encrypted-backup endpoints installed. Pairing mode and outbound-off verified.
+- Web `72c1cd25-bb45-4a2c-b77e-56768aa220ca`; public HTTPS returns 200 and
+  the operator route returns 404.
+
+Current checks: control 275 passed including PostgreSQL races; messaging 32
+passed against PostgreSQL; transport 19 passed including pinned wacli and both
+loopback address families. The browser acceptance harness passed two signups,
+first outbound phone challenges, independent runtime/backup capabilities,
+approved group participation, private-result approval/release, pause, and mobile
+layout. These use simulated provider services, not live WhatsApp or paid models.
+An earlier full-suite quota test allowed 100 instead of 75; the isolated test
+and complete rerun passed. Diagnostic assertions are retained; root cause has
+not been established and this must remain visible during canary review.
+
+The media relay now releases its database connection before transport I/O and
+limits concurrent downloads to one per runtime and four per process, with a
+fresh authorization check before releasing buffered bytes.
+
+The founder archive restored locally with 25,833 verified file checksums and
+seven SQLite integrity checks. All three service PostgreSQL archives restored
+into a disposable service. The original Hindsight database also restored: one
+bank, 14,324 memory units, 1,132 documents, and 5,228 entities. However, a real
+0.9 upgrade rehearsal removed 2,712 memory records. Its preservation gate
+correctly failed; no founder cutover is authorized by this evidence. Determine
+a compatible memory runtime or a separately validated preservation strategy
+before promotion. Matching embedding dimensions alone is insufficient: source
+embeddings use local BAAI/bge-small-en-v1.5 (384 dimensions), with RRF reranking.
+
+The source agent remains running. Private package pull credentials, a valid
+service-funded model key, primary-phone pairing, actual runtime canary, and
+fresh-tester WhatsApp acceptance remain required. No live signup-to-WhatsApp
+completion or founder migration is claimed.
