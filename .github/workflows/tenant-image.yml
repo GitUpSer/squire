@@ -32,7 +32,7 @@ on:
 
 env:
   # ghcr.io/<org>/<repo>/<image-name>
-  IMAGE_NAME: ghcr.io/shagarwal/squire/hermes-tenant-pilot
+  IMAGE_NAME: ghcr.io/gitupser/squire/hermes-tenant-pilot
 
 jobs:
   build:
