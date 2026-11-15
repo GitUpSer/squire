@@ -16,11 +16,6 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from contextlib import ExitStack, contextmanager
 
-import httpx
-import psycopg
-from psycopg import sql
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE = os.environ.get('PROXY_SMOKE_DATABASE_URL', 'postgresql://squire_test@127.0.0.1:55432/squire_integration_test')
 if not any(host in DATABASE for host in ['@127.0.0.1:', '@localhost:']):
@@ -109,6 +104,8 @@ def proxy_child(fd, config_path):
 
 @contextmanager
 def running_proxy():
+    import yaml
+
     cfg=yaml.safe_load((ROOT/'config.yaml').read_text())
     with ExitStack() as resources:
         provider=resources.enter_context(ThreadingHTTPServer(('127.0.0.1',0),Provider))
@@ -137,6 +134,10 @@ def running_proxy():
 
 
 def main():
+    import httpx
+    import psycopg
+    from psycopg import sql
+
     with psycopg.connect(DATABASE, autocommit=True) as db:
         db.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(SCHEMA)))
     with running_proxy() as (process, base_url):
