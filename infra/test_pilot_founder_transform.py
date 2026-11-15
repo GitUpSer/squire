@@ -111,23 +111,28 @@ def test_private_environment_quarantines_transport_and_old_control_capabilities(
     assert "private-model" not in json.dumps(result) and "legacy-transport" not in json.dumps(result)
 
 
-def test_private_promotion_flattens_home_and_writes_reviewed_marker_last(tmp_path):
+@pytest.mark.parametrize("sectioned",[False,True])
+def test_private_promotion_flattens_home_and_writes_reviewed_marker_last(tmp_path,sectioned):
     source=tmp_path/"snapshot";prepared=tmp_path/"prepared";source.mkdir();prepared.mkdir()
-    originals={".hermes/SOUL.md":"Owner identity", ".hermes/plugins/hindsight/__init__.py":"# approved public memory provider"}
+    originals={".hermes/SOUL.md":"Owner identity", ".hermes/plugins/hindsight/__init__.py":"# approved public memory provider", ".ssh/id_owner":"PRIVATE OWNER SSH KEY"}
     prepared_files={"config.yaml":"platforms:\n  squire:\n    enabled: true\n", "hindsight/config.json":'{"mode":"local_external","bank_id":"existing-bank"}'}
     entries=[]
     for root,values,label in ((source,originals,"snapshot"),(prepared,prepared_files,"prepared")):
         for name,value in values.items():
-            path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value)
-            entries.append({"root":label,"source":name,"destination":name.removeprefix(".hermes/") if label=="snapshot" else name,"sha256":checksum(path),"category":"memory" if label=="snapshot" else "runtime_config","reviewed_no_direct_transport":True})
+            section=("core" if name.startswith(".hermes/") else "integrations") if sectioned and label=="snapshot" else ""
+            physical=section+"/"+name if section else name
+            path=root/physical;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value)
+            entries.append({"root":label,"source":physical,**({"snapshot_section":section} if section else {}),"destination":name.removeprefix(".hermes/") if label=="snapshot" else name,"sha256":checksum(path),"category":"credential" if name.startswith(".ssh/") else "memory" if label=="snapshot" else "runtime_config","reviewed_no_direct_transport":True})
     # Archive restore deliberately flattens permissions to600; reviewed original
     # metadata, not local chmod guesses, authorizes executable restoration.
-    script=source/".hermes/scripts/report.py";script.parent.mkdir();script.write_text("print('safe report')");script.chmod(0o600)
+    script_relative=("core/" if sectioned else "")+".hermes/scripts/report.py"
+    script=source/script_relative;script.parent.mkdir();script.write_text("print('safe report')");script.chmod(0o600)
     mode_record={"sha256":checksum(script),"size":script.stat().st_size,"source_mode":0o755}
     metadata=prepared/"source-modes.json";metadata.write_text(json.dumps({"files":{".hermes/scripts/report.py":mode_record}}))
-    entries.append({"root":"snapshot","source":".hermes/scripts/report.py","destination":"scripts/report.py","sha256":checksum(script),"category":"workspace","reviewed_no_direct_transport":True,"source_mode":0o755})
+    entries.append({"root":"snapshot","source":script_relative,**({"snapshot_section":"core"} if sectioned else {}),"destination":"scripts/report.py","sha256":checksum(script),"category":"workspace","reviewed_no_direct_transport":True,"source_mode":0o755})
     # This old account-wide session is deliberately not in the positive file list.
-    forbidden=source/".hermes/whatsapp/session.json";forbidden.parent.mkdir();forbidden.write_text("legacy secret")
+    forbidden_relative=("core/" if sectioned else "")+".hermes/whatsapp/session.json"
+    forbidden=source/forbidden_relative;forbidden.parent.mkdir();forbidden.write_text("legacy secret")
     plan={"kind":"dm","runtime_id":"founder-runtime","migration_id":"migration-one","image_ref":"ghcr.io/org/image@sha256:"+"a"*64,"files":entries,"source_modes":{"root":"prepared","path":"source-modes.json","sha256":checksum(metadata)}}
     output=tmp_path/"runtime";transform.promote_private_files(source,prepared,output,plan)
     assert (output/"SOUL.md").read_text()=="Owner identity"
@@ -137,6 +142,8 @@ def test_private_promotion_flattens_home_and_writes_reviewed_marker_last(tmp_pat
     marker=json.loads((output/".squire/restored-home.json").read_text())
     assert marker["format"]=="squire-restored-home-v1" and marker["runtime_id"]=="founder-runtime"
     assert marker["files"]["SOUL.md"]==checksum(output/"SOUL.md")
+    assert (output/".ssh/id_owner").stat().st_mode&0o777==0o600
+    assert marker["credential_protection"]=={"existing_envelope":[],"owner_only_mode0600":[".ssh/id_owner"]}
     import importlib.util
     validator_path=Path(__file__).resolve().parents[1]/"tenant-image/bin/squire-restored-home.py"
     spec=importlib.util.spec_from_file_location("restored_home_validator",validator_path)
@@ -144,9 +151,13 @@ def test_private_promotion_flattens_home_and_writes_reviewed_marker_last(tmp_pat
     env={"TENANT_ID":"founder-runtime","SQUIRE_RUNTIME_KIND":"dm","SQUIRE_HINDSIGHT_VARIANT":"founder","HERMES_SKIP_CONFIG_MIGRATION":"1","SQUIRE_IMAGE_REF":plan["image_ref"]}
     validator.verify(output,output/".squire",env)
     with pytest.raises(ValueError,match="identity mismatch"):validator.verify(output,output/".squire",{**env,"TENANT_ID":"another-owner"})
-    forbidden_entry={"root":"snapshot","source":".hermes/whatsapp/session.json","destination":"whatsapp/session.json","sha256":checksum(forbidden),"category":"credential","reviewed_no_direct_transport":True}
+    forbidden_entry={"root":"snapshot","source":forbidden_relative,**({"snapshot_section":"core"} if sectioned else {}),"destination":"whatsapp/session.json","sha256":checksum(forbidden),"category":"credential","reviewed_no_direct_transport":True}
     with pytest.raises(MigrationError,match="quarantined"):transform.promote_private_files(source,prepared,tmp_path/"bad-runtime",{**plan,"files":[*entries,forbidden_entry]})
     assert not (tmp_path/"bad-runtime").exists()
+    browser_relative=("integrations/" if sectioned else "")+".camofox/checkpoints/owner.json"
+    browser=source/browser_relative;browser.parent.mkdir(parents=True);browser.write_text('{"cookies":[]}')
+    browser_entry={"root":"snapshot","source":browser_relative,**({"snapshot_section":"integrations"} if sectioned else {}),"destination":".camofox/checkpoints/owner.json","sha256":checksum(browser),"category":"browser","reviewed_no_direct_transport":True}
+    with pytest.raises(MigrationError,match="encrypted_state_import"):transform.promote_private_files(source,prepared,tmp_path/"bad-browser",{**plan,"files":[*entries,browser_entry]})
     entries[-1]["source_mode"]=0o744
     with pytest.raises(MigrationError,match="source_mode_review_mismatch"):transform.promote_private_files(source,prepared,tmp_path/"bad-mode",plan)
 

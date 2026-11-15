@@ -270,7 +270,11 @@ def promote_private_files(source,prepared,output,plan):
         require(str(destination) not in destinations,"duplicate_promotion_destination");destinations.add(str(destination))
         root=source if item.get("root")=="snapshot" else prepared if item.get("root")=="prepared" else None
         require(root is not None,"promotion_root_required")
-        expected_destination=str(relative).removeprefix(".hermes/") if root==source else str(relative)
+        logical=relative
+        if item.get("snapshot_section") is not None:
+            require(root==source and item["snapshot_section"] in {"core","integrations"} and relative.parts[0]==item["snapshot_section"],"snapshot_section_mismatch")
+            logical=Path(*relative.parts[1:])
+        expected_destination=str(logical).removeprefix(".hermes/") if root==source else str(relative)
         require(str(destination)==expected_destination,"source_layout_mapping_mismatch")
         path=root/relative
         require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root.resolve()) and checksum(path)==item["sha256"],"promoted_file_changed")
@@ -286,7 +290,7 @@ def promote_private_files(source,prepared,output,plan):
             credentials.add(str(destination))
         executable=False
         if item.get("source_mode") is not None:
-            mode=item["source_mode"];record=modes.get(item.get("source_mode_path",str(relative)))
+            mode=item["source_mode"];record=modes.get(item.get("source_mode_path",str(logical)))
             require(isinstance(mode,int) and not isinstance(mode,bool) and 0<=mode<=0o777 and isinstance(record,dict) and record.get("source_mode")==mode and record.get("sha256")==item["sha256"] and record.get("size")==path.stat().st_size,"source_mode_review_mismatch")
             executable=bool(mode&0o111)
             require(not executable or category in {"workspace","skill"},"executable_category_not_allowed")

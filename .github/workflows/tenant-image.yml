@@ -29,6 +29,11 @@ on:
       # must re-run this workflow -- that drift is what made every provisioned
       # tenant undeployable once already.
       - "apps/control-api/src/control_api/config.py"
+      - "infra/pilot_*.py"
+      - "infra/test_pilot_*.py"
+      - "infra/migrate_personal_agent.py"
+      - "infra/test_migrate_personal_agent.py"
+      - "infra/install_age.py"
 
 env:
   # ghcr.io/<org>/<repo>/<image-name>
@@ -163,6 +168,15 @@ jobs:
           python -m pip install -r tenant-image/overlay/requirements-test.lock
           python -m pip install --no-deps -e tenant-image/overlay/plugin
           python -m pytest tenant-image/overlay/tests tenant-image/tests/test_restored_home.py -q --disable-warnings --maxfail=2
+
+      - name: Verify founder transforms and encrypted backup restoration
+        env:
+          HERMES_SOURCE: ${{ github.workspace }}/.upstream/hermes
+          SQUIRE_TEST_AGE_DIR: /usr/local/bin
+        run: |
+          sudo python3 infra/install_age.py
+          export PYTHONPATH="${GITHUB_WORKSPACE}/infra:${HERMES_SOURCE}"
+          python -m pytest infra/test_migrate_personal_agent.py infra/test_pilot_backup_worker.py infra/test_pilot_integration_backup.py infra/test_pilot_restore_drill.py infra/test_pilot_hindsight_upgrade.py infra/test_pilot_founder_transform.py tenant-image/tests/test_backup_prepare.py -q --disable-warnings
 
       # Same graceful-skip contract as the build job: this workflow must not go
       # red on a branch where tenant-image/ is still a placeholder.
