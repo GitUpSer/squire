@@ -355,6 +355,9 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
  && echo '61e1ec455e021720af38a5cc5ff7566121363cb5b82b72f24e381ba2676a4888  /tmp/camoufox.zip' | sha256sum --check - \
  && (unzip -q /tmp/camoufox.zip -d /opt/squire/camoufox; status=$?; test "$status" -le 1) \
  && test -f /opt/squire/camoufox/camoufox-bin \
+ && test -f /opt/squire/camoufox/properties.json \
+ && test -f /opt/squire/camoufox/fontconfigs/linux/fonts.conf \
+ && ln -s fontconfigs /opt/squire/camoufox/fontconfig \
  && printf '%s\n' '{"version":"135.0.1","release":"beta.24"}' > /opt/squire/camoufox/version.json \
  && chmod -R a+rX /opt/squire/camofox /opt/squire/camoufox \
  && chmod 0755 /opt/squire/camoufox/camoufox /opt/squire/camoufox/camoufox-bin \

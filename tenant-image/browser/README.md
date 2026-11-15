@@ -5,6 +5,9 @@ Camofox matches the founder service: `@askjo/camofox-browser` 1.11.2,
 Firefox/Camoufox 135.0.1 beta.24. Package and browser archives are checked by
 SHA256 in the Dockerfile. Browser package code is fetched from the public npm
 registry; no founder files, profiles or keys enter the build context.
+The verified browser archive contains `fontconfigs/`; the image adds the
+`fontconfig` alias expected by camoufox-js 0.11.1 and the Camofox external-bundle
+adapter, retaining the archive's OS-specific fonts configuration unchanged.
 
 The image build starts the actual server as `hermes`, launches the actual browser,
 loads a local synthetic page, and verifies its snapshot. This is an availability
