@@ -194,6 +194,15 @@ ck "embeddings use an EXPLICIT key (LLM-key fallback trap)" \
 ck "openai embeddings dimensions pinned to 384" \
    "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS=384$' "$OUT" && echo 1 || echo 0)"
 
+# --- Pilot/founder memory identity survives switching LLM providers ---
+export SQUIRE_PRESERVE_LOCAL_EMBEDDINGS=true
+bash "$BIN/squire-hindsight-env.sh" >/dev/null
+ck "pilot retains local embeddings after OpenAI connect" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_PROVIDER=local$' "$OUT" && echo 1 || echo 0)"
+ck "pilot retains exact BGE model (384 dimensions)" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL=BAAI/bge-small-en-v1.5$' "$OUT" && echo 1 || echo 0)"
+ck "pilot retains RRF reranker" "$(grep -q '^HINDSIGHT_API_RERANKER_PROVIDER=rrf$' "$OUT" && echo 1 || echo 0)"
+ck "pilot never configures OpenAI embeddings key" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY=' "$OUT" && echo 0 || echo 1)"
+unset SQUIRE_PRESERVE_LOCAL_EMBEDDINGS
+
 # --- custom base URL: fail toward the local model, not runtime errors ---
 cat > "$T/shm/.env" <<'E'
 OPENAI_API_KEY=sk-openai-compat

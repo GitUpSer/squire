@@ -38,6 +38,10 @@ jobs:
   build:
     needs: patch-overlay-check
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [standard, founder]
     permissions:
       contents: read
       packages: write
@@ -65,14 +69,18 @@ jobs:
       - name: Determine image tags
         if: steps.dockerfile-check.outputs.exists == 'true'
         id: meta
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
+          SUFFIX=""
+          if [[ "$VARIANT" == "founder" ]]; then SUFFIX="-founder"; fi
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#tenant-pilot-v}"
-            echo "tags=${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:git-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE_NAME}:${VERSION}${SUFFIX},${IMAGE_NAME}:git-${GITHUB_SHA}${SUFFIX}" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
             # pull_request build: no registry push, just prove it builds.
-            echo "tags=${IMAGE_NAME}:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE_NAME}:pr-${{ github.event.number }}${SUFFIX}" >> "$GITHUB_OUTPUT"
             echo "push=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -95,8 +103,11 @@ jobs:
           context: tenant-image/
           push: ${{ steps.meta.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: HINDSIGHT_VARIANT=${{ matrix.variant }}
+          cache-from: |
+            type=gha,scope=buildkit
+            type=gha,scope=tenant-${{ matrix.variant }}
+          cache-to: type=gha,scope=tenant-${{ matrix.variant }},mode=max
           platforms: linux/amd64
 
   # ==========================================================================

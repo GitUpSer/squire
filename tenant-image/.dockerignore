@@ -8,6 +8,8 @@
 !browser/package-lock.json
 !browser/harden.py
 !browser/smoke.py
+!hindsight/
+!hindsight/smoke.py
 !bin/
 !bin/**
 !home-template/

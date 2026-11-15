@@ -71,7 +71,6 @@ ARG HERMES_VERSION=v2026.9.24
 # Pinned exactly, matching the digest-pin discipline above: a floating range is
 # the same mutable-input problem in a different coat. Every version below was
 # resolved against the real index on 2026-08-08; bump deliberately.
-ARG HINDSIGHT_VERSION=0.9.0
 # `+cpu` is the local version the PyTorch CPU index uses for its Linux wheels.
 ARG TORCH_VERSION=2.9.1+cpu
 ARG SUPERVISOR_VERSION=4.3.0
@@ -204,7 +203,7 @@ RUN uv venv --no-config --python 3.13 /opt/squire/venv \
 # (plugins/memory/hindsight/__init__.py: `if self._mode == "local_embedded":
 # import hindsight_embed.daemon_embed_manager`). We run local_external against a
 # daemon supervised by supervisord, so the gateway reaches Hindsight over HTTP
-# via hindsight-client (already baked into the upstream image) and never imports
+# via an explicitly pinned hindsight-client in the Hermes interpreter and never imports
 # the manager at all.
 #
 # torch is installed FIRST from PyTorch's CPU-only index. The default PyPI torch
@@ -225,16 +224,36 @@ RUN uv venv --no-config --python 3.13 /opt/squire/venv \
 # local-onnx (added for Gate G1, 2026-08-19): onnxruntime + tokenizers, ~50MB
 # and NO torch dependency. Makes HINDSIGHT_API_EMBEDDINGS_PROVIDER=onnx a
 # viable low-RAM embedder (default model intfloat/multilingual-e5-small,
-# 384-dim — same dimension as local's bge-small, so existing vector tables
-# survive the switch). Keyless and in-container, unlike the openai provider;
+# 384-dim). Equal dimension does NOT make vectors from different models
+# comparable: switching models requires explicit re-embedding. The founder
+# remains on its original BGE model. Keyless and in-container;
 # kept alongside local-ml so `local` remains the image default until a
 # fleet-wide embedder decision is made.
 RUN uv venv --no-config --python 3.13 /opt/squire/hindsight-venv \
  && uv pip install --no-config --python /opt/squire/hindsight-venv/bin/python --no-cache \
-        --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}" \
+        --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+
+# The founder's schema is the 0.5.2 head. Upgrading it to 0.9.0 removes
+# observations; preserve it in a separate immutable image, never a fleet default.
+ARG HINDSIGHT_VARIANT=standard
+ENV SQUIRE_HINDSIGHT_VARIANT=${HINDSIGHT_VARIANT}
+RUN case "$HINDSIGHT_VARIANT" in \
+      standard) memory_version=0.9.0; memory_extras=embedded-db,local-ml,local-onnx; pg_version=0.15.1 ;; \
+      founder) memory_version=0.5.2; memory_extras=embedded-db,local-ml; pg_version=0.12.3 ;; \
+      *) echo 'Unknown Hindsight image variant' >&2; exit 1 ;; \
+    esac \
  && uv pip install --no-config --python /opt/squire/hindsight-venv/bin/python --no-cache \
-        "hindsight-api-slim[embedded-db,local-ml,local-onnx]==${HINDSIGHT_VERSION}" \
+        "hindsight-api-slim[${memory_extras}]==${memory_version}" "pg0-embedded==${pg_version}" \
  && /opt/squire/hindsight-venv/bin/hindsight-api --help > /dev/null
+
+# Hermes 9.24 moved Hindsight to its external plugin catalog. Its base image
+# no longer includes the HTTP client. Match the founder's installed client.
+RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
+        'hindsight-client==0.10.3'
+COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
+RUN if [ "$HINDSIGHT_VARIANT" = founder ]; then \
+      runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py; \
+    fi
 
 # ---------------------------------------------------------------------------
 # 2b. restic (nightly volume backups)
@@ -411,6 +430,18 @@ COPY supervisord.conf /opt/squire/supervisord.conf
 #   4. In the gateway logs, confirm NO line about starting an embedded daemon
 #      and no "hindsight-embed" activity — that would mean local_embedded.
 COPY home-template/ /opt/squire/home-template/
+# Exact catalog entry from Hermes 9.24; first-boot cp -n preserves a restored
+# founder plugin. Only public source code is downloaded into this build.
+RUN mkdir -p /opt/squire/home-template/plugins/hindsight \
+ && curl --fail --location --retry 3 \
+      https://codeload.github.com/vectorize-io/hindsight/tar.gz/176f8c2de1369f569c489b831d143b78128b5535 \
+      -o /tmp/hindsight-plugin.tgz \
+ && echo '3f7ea75f19ce0d3770019b3f748e3d7f026ccfedd82a9d754c695dda3905e67d  /tmp/hindsight-plugin.tgz' | sha256sum --check - \
+ && tar -xzf /tmp/hindsight-plugin.tgz --strip-components=3 \
+      -C /opt/squire/home-template/plugins/hindsight \
+      hindsight-176f8c2de1369f569c489b831d143b78128b5535/hindsight-integrations/hermes \
+ && test -f /opt/squire/home-template/plugins/hindsight/plugin.yaml \
+ && rm /tmp/hindsight-plugin.tgz
 
 # Byte-compile our Python so a syntax error fails the BUILD, not a tenant boot.
 RUN /opt/squire/venv/bin/python -m py_compile \
