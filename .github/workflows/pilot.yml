@@ -1,0 +1,116 @@
+name: pilot acceptance
+on:
+  pull_request:
+    paths: ["apps/trial-proxy/**", "apps/messaging/**", "apps/whatsapp-transport/**", "apps/pilot-web/**", "apps/control-api/**", "tenant-image/**", "tests/pilot/**", ".github/workflows/pilot.yml"]
+  push:
+    branches: [main, pilot/wacli-20]
+    paths: ["apps/trial-proxy/**", "apps/messaging/**", "apps/whatsapp-transport/**", "apps/pilot-web/**", "apps/control-api/**", "tenant-image/**", "tests/pilot/**", ".github/workflows/pilot.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: pilot-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  postgres-and-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: squire_test
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: squire_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U squire_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install isolated test environments
+        run: |
+          python -m venv /tmp/pilot-control
+          python -m venv /tmp/pilot-messaging
+          python -m venv /tmp/pilot-transport
+          python -m venv /tmp/pilot-proxy
+          /tmp/pilot-control/bin/pip install -e 'apps/control-api[dev]'
+          /tmp/pilot-messaging/bin/pip install -e 'apps/messaging[dev]'
+          /tmp/pilot-transport/bin/pip install -e 'apps/whatsapp-transport[test]'
+          /tmp/pilot-proxy/bin/pip install 'litellm[proxy]==1.94.2' pytest pyyaml 'prisma==0.15.0' 'psycopg[binary]==3.3.9'
+      - name: PostgreSQL control and messaging tests
+        env:
+          PILOT_TEST_POSTGRES_URL: postgresql+psycopg://squire_test:test-only@127.0.0.1:5432/squire_test
+          MESSAGING_TEST_DATABASE_URL: postgresql+psycopg://squire_test:test-only@127.0.0.1:5432/squire_test
+        run: |
+          /tmp/pilot-control/bin/python -m pytest apps/control-api/tests/test_pilot.py apps/control-api/tests/test_pilot_postgres.py -q
+          /tmp/pilot-messaging/bin/python -m pytest apps/messaging/tests -q
+          /tmp/pilot-transport/bin/python -m pytest apps/whatsapp-transport/tests -q
+          LITELLM_LOCAL_MODEL_COST_MAP=True /tmp/pilot-proxy/bin/python -m pytest apps/trial-proxy/tests -q
+      - name: Real Prisma and native Anthropic spend smoke
+        env:
+          PROXY_SMOKE_DATABASE_URL: postgresql://squire_test:test-only@127.0.0.1:5432/squire_test
+          PRISMA_BINARY_CACHE_DIR: /tmp/squire-prisma-cache
+        run: |
+          export PATH="/tmp/pilot-proxy/bin:$PATH"
+          SCHEMA="$(python -c 'import pathlib,litellm; print(pathlib.Path(litellm.__file__).parent / "proxy/schema.prisma")')"
+          prisma generate --schema "$SCHEMA"
+          python apps/trial-proxy/scripts/smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pilot-proxy-accounting
+          path: /tmp/squire-proxy-smoke
+      - name: Install browser and Caddy
+        run: |
+          npm install --prefix /tmp/pilot-browser playwright@1.65.1
+          /tmp/pilot-browser/node_modules/.bin/playwright install --with-deps chromium
+          mkdir /tmp/pilot-caddy
+          curl -fsSL https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_amd64.tar.gz -o /tmp/pilot-caddy/caddy.tar.gz
+          curl -fsSL https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_checksums.txt -o /tmp/pilot-caddy/checksums.txt
+          cd /tmp/pilot-caddy
+          mv caddy.tar.gz caddy_2.11.9_linux_amd64.tar.gz
+          grep 'caddy_2.11.9_linux_amd64.tar.gz$' checksums.txt | sha512sum -c -
+          tar -xzf caddy_2.11.9_linux_amd64.tar.gz caddy
+      - name: Browser signup and isolation acceptance
+        env:
+          PILOT_TEST_DATABASE_URL: postgresql://squire_test:test-only@127.0.0.1:5432/squire_test
+          CONTROL_PYTHON: /tmp/pilot-control/bin/python
+          MESSAGING_PYTHON: /tmp/pilot-messaging/bin/python
+          CADDY_BIN: /tmp/pilot-caddy/caddy
+          PLAYWRIGHT_MODULE: /tmp/pilot-browser/node_modules/playwright
+          PILOT_TEST_ARTIFACTS: /tmp/pilot-artifacts
+        run: |
+          export CHROMIUM_BIN="$(node -e "process.stdout.write(require('/tmp/pilot-browser/node_modules/playwright').chromium.executablePath())")"
+          /tmp/pilot-control/bin/python tests/pilot/run.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pilot-browser-acceptance
+          path: /tmp/pilot-artifacts
+  build-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - {name: messaging, file: apps/messaging/Dockerfile, context: .}
+          - {name: messaging-worker, file: apps/messaging/Dockerfile.worker, context: .}
+          - {name: pilot-web, file: apps/pilot-web/Dockerfile, context: apps/pilot-web}
+          - {name: trial-proxy, file: apps/trial-proxy/Dockerfile, context: apps/trial-proxy}
+          - {name: control-api, file: apps/control-api/Dockerfile, context: apps/control-api}
+          - {name: whatsapp-transport, file: apps/whatsapp-transport/Dockerfile, context: .}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          tags: squire-pilot-test:${{ matrix.name }}

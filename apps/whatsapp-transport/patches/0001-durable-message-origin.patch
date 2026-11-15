@@ -1,0 +1,98 @@
+diff --git a/internal/app/sync.go b/internal/app/sync.go
+index 7f38e75..02cc947 100644
+--- a/internal/app/sync.go
++++ b/internal/app/sync.go
+@@ -404,6 +404,7 @@ func (a *App) upsertMessageChat(pm wa.ParsedMessage, name string) error {
+ }
+ 
+ type messageStoreOptions struct {
++	squireLiveOrigin         bool
+ 	archiveIncoming          bool
+ 	archiveObservedMS        int64
+ 	archiveSettingObservedMS int64
+@@ -522,6 +523,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage, optio
+ 	}
+ 
+ 	if err := a.db.UpsertMessage(store.UpsertMessageParams{
++		SquireLiveOrigin:         options.squireLiveOrigin,
+ 		ArchiveIncoming:          options.archiveIncoming,
+ 		ArchiveObservedMS:        options.archiveObservedMS,
+ 		ArchiveSettingObservedMS: options.archiveSettingObservedMS,
+diff --git a/internal/app/sync_events.go b/internal/app/sync_events.go
+index 73a443f..ab62e99 100644
+--- a/internal/app/sync_events.go
++++ b/internal/app/sync_events.go
+@@ -629,7 +629,7 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
+ 		}
+ 	}
+ 	incrementUnread := a.shouldIncrementLiveUnread(ctx, pm)
+-	storeOptions := messageStoreOptions{archiveIncoming: incrementUnread && !pm.Edited && !archiveDisabled, archiveObservedMS: observedArchiveMS, archiveSettingObservedMS: observedSettingMS}
++	storeOptions := messageStoreOptions{squireLiveOrigin: v.SourceWebMsg == nil, archiveIncoming: incrementUnread && !pm.Edited && !archiveDisabled, archiveObservedMS: observedArchiveMS, archiveSettingObservedMS: observedSettingMS}
+ 	stored := false
+ 	if storeOptions.archiveIncoming {
+ 		if ticket, queued := a.appStatePersist.reserveAfterPending(); queued {
+diff --git a/internal/store/db.go b/internal/store/db.go
+index 25ff9be..136405e 100644
+--- a/internal/store/db.go
++++ b/internal/store/db.go
+@@ -69,6 +69,10 @@ func open(path string, readOnly bool) (*DB, error) {
+ 		_ = db.Close()
+ 		return nil, err
+ 	}
++	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS squire_change_origins(sequence INTEGER PRIMARY KEY, live INTEGER NOT NULL)`); err != nil {
++		_ = db.Close()
++		return nil, err
++	}
+ 	s.receiptsEnabled = s.hasTable("message_receipts")
+ 	if err := sqliteutil.ChmodFiles(path, 0o600); err != nil {
+ 		_ = db.Close()
+diff --git a/internal/store/messages.go b/internal/store/messages.go
+index c948b63..afeafcc 100644
+--- a/internal/store/messages.go
++++ b/internal/store/messages.go
+@@ -15,6 +15,7 @@ import (
+ var ErrMessageNotTombstoned = errors.New("message is not tombstoned")
+ 
+ type UpsertMessageParams struct {
++	SquireLiveOrigin         bool
+ 	ArchiveIncoming          bool
+ 	ArchiveObservedMS        int64
+ 	ArchiveSettingObservedMS int64
+@@ -143,14 +144,21 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
+ 		MsgID_2:         strings.TrimSpace(p.MsgID),
+ 	}
+ 	markRead := p.marksChatRead()
+-	if !p.ArchiveIncoming && !markRead {
+-		return d.q.UpsertMessage(storeCtx(), params)
+-	}
++
+ 	tx, err := d.sql.Begin()
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer tx.Rollback()
++	// Squire pilot: origin and message change commit atomically. Default unknown/history
++	// can never gain live provenance from an unrelated late history import.
++	if _, err := tx.Exec(`UPDATE chats SET unread=unread WHERE jid=?`, p.ChatJID); err != nil {
++		return err
++	}
++	var squireBefore int64
++	if err := tx.QueryRow(`SELECT COALESCE(MAX(sequence),0) FROM message_changes`).Scan(&squireBefore); err != nil {
++		return err
++	}
+ 	// Decide and write under the writer lock before reading message state.
+ 	// A deferred read-then-write transaction can fail with SQLITE_BUSY_SNAPSHOT.
+ 	if p.ArchiveIncoming {
+@@ -170,6 +178,12 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
+ 	if err := d.q.WithTx(tx).UpsertMessage(storeCtx(), params); err != nil {
+ 		return err
+ 	}
++	if _, err := tx.Exec(`INSERT INTO squire_change_origins(sequence,live) SELECT sequence,? FROM message_changes WHERE sequence>? AND chat_jid=? AND msg_id=?`, boolToInt64(p.SquireLiveOrigin), squireBefore, p.ChatJID, p.MsgID); err != nil {
++		return err
++	}
++	if _, err := tx.Exec(`DELETE FROM squire_change_origins WHERE sequence < (SELECT floor FROM change_state WHERE id=1)`); err != nil {
++		return err
++	}
+ 	if markRead {
+ 		if err := clearChatUnreadThrough(tx, p.ChatJID, p.Timestamp, []string{p.MsgID}, true); err != nil {
+ 			return err

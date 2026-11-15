@@ -1,6 +1,7 @@
 # --- Environment / secrets ---
 .env
 .env.*
+.env-pilot-setup
 !.env.example
 env.ignore
 *.pem

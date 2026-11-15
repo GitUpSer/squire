@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +31,27 @@ class Settings(BaseSettings):
     # so a half-configured environment still works rather than silently pointing
     # every tenant at nothing.
     control_api_internal_url: str = ""
+
+    # Pilot is opt-in and fails closed until deployment secrets exist.
+    pilot_enabled: bool = False
+    pilot_admission_open: bool = False
+    pilot_secret: str = ""
+    pilot_web_origin: str = "https://app.thesquire.co"
+    pilot_cookie_secure: bool = True
+    pilot_seat_limit: int = 20
+    pilot_trial_hours: int = 72
+    pilot_daily_turn_limit: int = 75
+    pilot_group_limit: int = 1
+    pilot_model_proxy_url: str = ""
+    pilot_whatsapp_number: str = ""
+    pilot_founder_backup_bucket: str = ""
+    messaging_base_url: str = ""
+    messaging_service_token: str = ""
+    control_messaging_service_token: str = ""
+    resend_api_key: str = ""
+    resend_from: str = ""
+    resend_api_url: str = "https://api.resend.com"
+    pilot_worker_enabled: bool = False
 
     # -- Railway ------------------------------------------------------------
     railway_api_token: str = ""
@@ -59,6 +81,8 @@ class Settings(BaseSettings):
     # pushing a `tenant-image-v0.1.0` git tag (see .github/workflows/tenant-image.yml).
     # Normally overridden per-deploy with the version actually being shipped.
     tenant_image: str = "ghcr.io/shagarwal/squire/hermes-tenant:v0.1.0"
+    tenant_registry_username: str = ""
+    tenant_registry_password: str = Field(default="", repr=False)
     # CROSS-SERVICE CONSTANT -- must equal the tenant image's volume/HOME.
     #
     # This is where Railway mounts the tenant's persistent volume, and the tenant

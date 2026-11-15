@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from control_api import __version__, provisioning
 from control_api.config import get_settings
 from control_api.db import init_db
-from control_api.routers import internal, public
+from control_api.routers import internal, public, pilot
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,9 @@ def _start_worker(stop: threading.Event) -> threading.Thread:
         while not stop.wait(interval):
             try:
                 provisioning.run_pending_jobs()
+                if get_settings().pilot_worker_enabled:
+                    from control_api.pilot_lifecycle import run_lifecycle
+                    run_lifecycle()
             except Exception:  # noqa: BLE001 -- the worker must never die
                 log.exception("provisioning worker tick failed")
 
@@ -46,6 +49,11 @@ def _start_worker(stop: threading.Event) -> threading.Thread:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    if settings.pilot_enabled:
+        if len(settings.pilot_secret) < 32:
+            raise RuntimeError("PILOT_SECRET must contain at least 32 characters")
+        if settings.internal_api_token == "dev-internal-token":
+            raise RuntimeError("pilot requires a dedicated operator credential")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
@@ -70,6 +78,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(internal.router)
     app.include_router(public.router)
+    app.include_router(pilot.router)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict[str, str]:
@@ -87,8 +96,7 @@ def run() -> None:  # pragma: no cover -- console-script entrypoint
 
     import uvicorn
 
-    uvicorn.run(
-        "control_api.main:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8080")),
-    )
+    import socket
+    listener = socket.create_server(("::", int(os.environ.get("PORT", "8080"))),
+                                    family=socket.AF_INET6, dualstack_ipv6=True)
+    uvicorn.Server(uvicorn.Config("control_api.main:app", host="::", log_level="info")).run(sockets=[listener])
