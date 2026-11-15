@@ -237,6 +237,9 @@ RUN uv venv --no-config --python 3.13 /opt/squire/hindsight-venv \
 # observations; preserve it in a separate immutable image, never a fleet default.
 ARG HINDSIGHT_VARIANT=standard
 ENV SQUIRE_HINDSIGHT_VARIANT=${HINDSIGHT_VARIANT}
+# 0.5.2 omitted SQLAlchemy's <2.1 ceiling (present in 0.9.0). Both daemons
+# declare psycopg2; 2.1 changes the plain postgresql:// default to psycopg3.
+# Keep the tested 2.0 driver contract instead of changing migration drivers.
 RUN case "$HINDSIGHT_VARIANT" in \
       standard) memory_version=0.9.0; memory_extras=embedded-db,local-ml,local-onnx; pg_version=0.15.1 ;; \
       founder) memory_version=0.5.2; memory_extras=embedded-db,local-ml; pg_version=0.12.3 ;; \
@@ -244,6 +247,7 @@ RUN case "$HINDSIGHT_VARIANT" in \
     esac \
  && uv pip install --no-config --python /opt/squire/hindsight-venv/bin/python --no-cache \
         "hindsight-api-slim[${memory_extras}]==${memory_version}" "pg0-embedded==${pg_version}" \
+        'sqlalchemy==2.0.52' \
  && /opt/squire/hindsight-venv/bin/hindsight-api --help > /dev/null
 
 # Hermes 9.24 moved Hindsight to its external plugin catalog. Its base image
@@ -251,9 +255,7 @@ RUN case "$HINDSIGHT_VARIANT" in \
 RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
         'hindsight-client==0.10.3'
 COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
-RUN if [ "$HINDSIGHT_VARIANT" = founder ]; then \
-      runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py; \
-    fi
+RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py
 
 # ---------------------------------------------------------------------------
 # 2b. restic (nightly volume backups)
@@ -430,8 +432,8 @@ COPY supervisord.conf /opt/squire/supervisord.conf
 #   4. In the gateway logs, confirm NO line about starting an embedded daemon
 #      and no "hindsight-embed" activity — that would mean local_embedded.
 COPY home-template/ /opt/squire/home-template/
-# Exact catalog entry from Hermes 9.24; first-boot cp -n preserves a restored
-# founder plugin. Only public source code is downloaded into this build.
+# Exact catalog entry from Hermes 9.24. Reviewed founder adoption explicitly
+# preserves restored files; normal first boot seeds this public plugin.
 RUN mkdir -p /opt/squire/home-template/plugins/hindsight \
  && curl --fail --location --retry 3 \
       https://codeload.github.com/vectorize-io/hindsight/tar.gz/176f8c2de1369f569c489b831d143b78128b5535 \
@@ -446,6 +448,7 @@ RUN mkdir -p /opt/squire/home-template/plugins/hindsight \
 # Byte-compile our Python so a syntax error fails the BUILD, not a tenant boot.
 RUN /opt/squire/venv/bin/python -m py_compile \
         /opt/squire/bin/squire_secrets.py \
+        /opt/squire/bin/squire-restored-home.py \
         /opt/squire/bin/squire-webhook-shim.py \
         /opt/squire/bin/squire-hindsight-healthcheck.py \
         /opt/squire/bin/squire-heartbeat.py \

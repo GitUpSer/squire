@@ -14,6 +14,10 @@ import time
 from urllib.request import urlopen
 
 
+def expected_versions():
+    return {"founder": ("0.5.2", "0.12.3"), "standard": ("0.9.0", "0.15.1")}[os.environ["SQUIRE_HINDSIGHT_VARIANT"]]
+
+
 def serve():
     import uvicorn
     from importlib.metadata import version
@@ -22,8 +26,16 @@ def serve():
     from hindsight_api.engine.embeddings import Embeddings
     from hindsight_api.engine.cross_encoder import RRFPassthroughCrossEncoder
 
-    assert version("hindsight-api-slim") == "0.5.2"
-    assert version("pg0-embedded") == "0.12.3"
+    api_version, pg_version = expected_versions()
+    assert version("hindsight-api-slim") == api_version
+    assert version("pg0-embedded") == pg_version
+    assert version("sqlalchemy") == "2.0.52"
+    from sqlalchemy import create_engine
+    # 0.5.2 declares psycopg2 but omitted the <2.1 constraint added by 0.9.
+    # SQLAlchemy 2.1 silently switches the plain PostgreSQL URL to psycopg3.
+    driver_check = create_engine("postgresql://synthetic@127.0.0.1/unused")
+    assert driver_check.dialect.driver == "psycopg2"
+    driver_check.dispose()
 
     class SyntheticEmbeddings(Embeddings):
         @property
@@ -74,7 +86,8 @@ def check():
                 recalled = client.recall(bank_id="squire-image-smoke", query="synthetic empty bank", types=["observation"])
                 assert recalled.results == [], "new synthetic bank must be empty"
                 client.delete_bank("squire-image-smoke")
-                print("Founder Hindsight 0.5.2 / pg0 0.12.3 / Hermes client 0.10.3 health and HTTP bank/recall gate passed")
+                api_version, pg_version = expected_versions()
+                print(f"Hindsight {api_version} / pg0 {pg_version} / Hermes client 0.10.3 health and HTTP bank/recall gate passed")
             except Exception:
                 log.flush(); log.seek(0); print(log.read()[-10000:])
                 raise

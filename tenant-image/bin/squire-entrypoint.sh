@@ -157,6 +157,18 @@ first_boot=false
 if [ ! -f "$INIT_MARKER" ]; then
     first_boot=true
 fi
+restored_home=false
+if [ "$first_boot" = true ] && [ "${SQUIRE_RESTORED_HOME:-false}" != true ]; then
+    if [ -e "$STATE_DIR/restored-home.json" ] || { [ "${SQUIRE_HINDSIGHT_VARIANT:-}" = founder ] && [ -f "$HERMES_HOME/state.db" ]; }; then
+        die "restored founder data requires explicit reviewed restored-home adoption"
+    fi
+fi
+if [ "$first_boot" = true ] && [ "${SQUIRE_RESTORED_HOME:-false}" = true ]; then
+    if ! "$SQUIRE_PYTHON" "$SQUIRE_BIN/squire-restored-home.py"; then
+        die "reviewed restored-home adoption failed"
+    fi
+    restored_home=true
+fi
 
 seed_template() {
     local overwrite="$1"
@@ -166,6 +178,13 @@ seed_template() {
     while IFS= read -r -d '' src; do
         rel="${src#"$TEMPLATE_DIR"/}"
         dst="$HERMES_HOME/$rel"
+        # The restored memory plugin is one reviewed version, not a collection
+        # of files to merge with a newer catalog version on this or later boots.
+        case "$rel" in
+            plugins/hindsight/*)
+                [ "${SQUIRE_RESTORED_HOME:-false}" != true ] || continue
+                ;;
+        esac
         if [ -e "$dst" ] && [ "$overwrite" != "overwrite" ]; then
             continue
         fi
@@ -176,10 +195,11 @@ seed_template() {
     done < <(find "$TEMPLATE_DIR" -type f -print0)
 }
 
-if [ "$first_boot" = true ]; then
+if [ "$first_boot" = true ] && [ "$restored_home" = false ]; then
     log "first boot — initialising $HERMES_HOME from baked template"
     seed_template overwrite
 else
+    [ "$restored_home" = false ] || log "adopting reviewed restored home without overwriting existing files"
     seed_template keep-existing
 fi
 
@@ -207,7 +227,7 @@ mkdir -p "$HERMES_HOME/logs" "$HERMES_HOME/sessions" "$HERMES_HOME/skills" \
 #     a tenant who has already finished — re-onboarding someone who has used the
 #     product for a week is a worse bug than never onboarding them at all.
 CONCIERGE_STATE="$STATE_DIR/concierge-state.json"
-if [ "$first_boot" = true ] && [ ! -f "$CONCIERGE_STATE" ]; then
+if [ "$first_boot" = true ] && [ "$restored_home" = false ] && [ ! -f "$CONCIERGE_STATE" ]; then
     # Written with printf rather than through the control venv: onboarding state
     # must not depend on a Python interpreter being importable this early.
     printf '{"state":"greet","name":null,"timezone":null,"llm":"trial","updated":"%s"}\n' \
