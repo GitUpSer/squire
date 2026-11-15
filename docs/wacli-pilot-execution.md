@@ -201,3 +201,32 @@ The source agent remains running. Private package pull credentials, a valid
 service-funded model key, primary-phone pairing, actual runtime canary, and
 fresh-tester WhatsApp acceptance remain required. No live signup-to-WhatsApp
 completion or founder migration is claimed.
+
+### Matching-version memory rehearsal and cleanup
+
+The 0.9 upgrade removed exactly 2,712 derived observations; world/experience
+facts and surviving memory contents did not change. A separate 0.5.2 rehearsal
+kept the original schema head `h3i4j5k6l7m8`, all 14,324 memory units, and the
+checked bank/document/entity/content hashes unchanged. The founder will use a
+separate image pinned to that memory version and pg0 0.12.3. New-customer images
+remain on 0.9. Actual image startup and recall parity are still required.
+
+The copied queue contained 6,766 completed and 224 failed operations, with no
+pending/processing work. Keep the memory worker disabled during pre-cutover
+checks and recheck the final fenced snapshot rather than assuming this remains
+true. The scratch PostgreSQL service and volume were deleted after preserving
+the rehearsal reports locally. Its PostgreSQL 18.7/vector 0.8.7 differ from the
+source embedded versions; this is not evidence of exact image compatibility.
+
+Founder core (4,375,882,984 encrypted bytes), integrations (628,090,776 bytes),
+and reviewed source-mode metadata (8,050,792 bytes) have all been uploaded to
+the encrypted backup bucket, downloaded, and verified against their SHA256.
+Private decryption keys remain local. Backup worker deployment
+`d0c1ab79-fdb6-4fc7-991c-8f8281be35e6` is SUCCESS with retention covering the
+founder archive namespaces.
+
+Five additional quota race runs passed. Pilot CI run `43760452229` passed the
+PostgreSQL/browser/model-accounting suite and all six service image builds.
+Runtime image candidates rc3 and rc4 failed the actual browser build gate;
+font-resource mapping and an upstream missing `await` were identified. A new
+image candidate must pass before any tenant image is promoted.

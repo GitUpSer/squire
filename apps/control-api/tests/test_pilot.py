@@ -282,6 +282,9 @@ def test_imported_founder_preserves_model_key_and_endpoint(pilot):
         variables=clients.railway.set_variables.call_args.args[1]
         assert "ANTHROPIC_API_KEY" not in variables
         assert "ANTHROPIC_BASE_URL" not in variables
+        assert variables["SQUIRE_PRESERVE_LOCAL_EMBEDDINGS"]=="true"
+        assert variables["HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL"]=="BAAI/bge-small-en-v1.5"
+        assert variables["HINDSIGHT_API_RERANKER_PROVIDER"]=="rrf"
 
 
 def test_revoking_runtime_cannot_heartbeat_or_activate(pilot):
@@ -329,3 +332,17 @@ def test_extension_operator_auth_idempotency_and_audit(pilot):
     with Session(get_engine()) as session:
         assert len(session.exec(select(PilotExtension)).all())==1
         assert session.get(PilotEntitlement,"extend-me").state=="extending"
+
+
+def test_founder_import_requires_immutable_special_image(pilot,monkeypatch):
+    body={"email":"founder@example.com","tenant_id":"founder-one","conversation_id":"founder-dm","service_id":"founder-service","volume_id":"founder-volume","service_name":"founder-one","internal_url":"http://founder-one.railway.internal:8080","display_name":"Founder","encryption_confirmed":True,"consent_version":"pilot-2026-11-15"}
+    headers={"Authorization":"Bearer test-internal-token"}
+    monkeypatch.setattr(get_settings(),"pilot_founder_image","ghcr.io/org/image:founder")
+    assert pilot.post("/v1/operator/founder",json=body,headers=headers).status_code==503
+    image="ghcr.io/org/image@sha256:"+"a"*64
+    monkeypatch.setattr(get_settings(),"pilot_founder_image",image)
+    response=pilot.post("/v1/operator/founder",json=body,headers=headers)
+    assert response.status_code==200,response.text
+    with Session(get_engine()) as session:
+        assert session.get(Tenant,"founder-one").image_ref==image
+        assert session.get(PilotEntitlement,"founder-one").state=="imported_active"

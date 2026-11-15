@@ -705,9 +705,14 @@ def _step_deploy(session: Session, tenant: Tenant, clients: ProvisionClients) ->
     settings = get_settings()
     # Serverless sleep before the first deploy so the very first boot is already
     # sleep-enabled (implementation-plan §2 / Gate G1).
-    clients.railway.configure_service_instance(
-        tenant.railway_service_id, sleep_application=settings.railway_tenant_sleep
-    )
+    from control_api.pilot_models import PilotRuntime,PilotEntitlement
+    runtime=session.get(PilotRuntime,tenant.id)
+    entitlement=session.get(PilotEntitlement,runtime.owner_tenant_id) if runtime else None
+    options={"sleep_application":settings.railway_tenant_sleep}
+    if runtime and runtime.kind=="dm" and entitlement and entitlement.state=="imported_active":
+        if not tenant.image_ref or "@sha256:" not in tenant.image_ref:raise ProvisioningError("founder immutable image missing")
+        options["image"]=tenant.image_ref
+    clients.railway.configure_service_instance(tenant.railway_service_id,**options)
     clients.railway.deploy(tenant.railway_service_id)
     _touch(session, tenant)
 

@@ -88,3 +88,16 @@ def test_provisioning_cannot_deploy_paused_pilot():
         clients=Mock();result=advance_job(session,job.id,clients)
         assert result.status==JobStatus.FAILED
         clients.railway.deploy.assert_not_called()
+
+
+def test_founder_compatible_image_routed_only_to_imported_private_runtime():
+    from control_api.provisioning import _step_deploy
+    with Session(get_engine()) as session:
+        seed(session,"founder-image",0,"imported_active",True)
+        founder=session.get(Tenant,"founder-image");founder.image_ref="ghcr.io/org/founder@sha256:"+"f"*64;session.add(founder);session.commit()
+        clients=Mock();_step_deploy(session,founder,clients)
+        assert clients.railway.configure_service_instance.call_args.kwargs["image"]==founder.image_ref
+        seed(session,"customer-image",0,"active",True)
+        customer=session.get(Tenant,"customer-image");customer.image_ref="ghcr.io/org/customer@sha256:"+"c"*64;session.add(customer);session.commit()
+        clients=Mock();_step_deploy(session,customer,clients)
+        assert "image" not in clients.railway.configure_service_instance.call_args.kwargs

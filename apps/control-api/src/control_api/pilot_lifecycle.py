@@ -19,6 +19,7 @@ from control_api.provisioning import as_aware
 def set_runtime_variables(session,tenant,clients):
     runtime=session.get(PilotRuntime,tenant.id);s=get_settings()
     variables={"TENANT_ID":runtime.id,"SQUIRE_RUNTIME_ID":runtime.id,"SQUIRE_DEPLOYMENT_GENERATION":str(runtime.deployment_generation),"SQUIRE_RUNTIME_KIND":runtime.kind,"SQUIRE_OWNER_TENANT_ID":runtime.owner_tenant_id,"SQUIRE_CONVERSATION_ID":runtime.scope_id,"SQUIRE_MESSAGING_URL":s.messaging_base_url,"SQUIRE_EGRESS_TOKEN":runtime_token(runtime.id,"egress",runtime.generation),"SQUIRE_INGRESS_TOKEN":runtime_token(runtime.id,"ingress",runtime.generation),"SQUIRE_CONTROL_TOKEN":runtime_token(runtime.id,"control",runtime.generation),"CONTROL_API_URL":s.effective_control_api_url,"SQUIRE_IMAGE_REF":tenant.image_ref or s.tenant_image,"SQUIRE_HEARTBEAT_INTERVAL":str(s.tenant_heartbeat_interval_seconds),"SQUIRE_VOLUME":s.tenant_volume_mount_path,"PORT":str(s.tenant_port),"ANTHROPIC_BASE_URL":s.effective_trial_base_url,"SQUIRE_DISABLE_PRIVATE_TOOLS":"true" if runtime.kind=="group" else "false"}
+    variables.update({"SQUIRE_PRESERVE_LOCAL_EMBEDDINGS":"true","HINDSIGHT_API_EMBEDDINGS_PROVIDER":"local","HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL":"BAAI/bge-small-en-v1.5","HINDSIGHT_API_RERANKER_PROVIDER":"rrf"})
     ent=session.get(PilotEntitlement,runtime.owner_tenant_id)
     private_provider=runtime.kind=="dm" and (tenant.connected_provider or (ent and ent.state=="imported_active"))
     if private_provider:

@@ -1,6 +1,7 @@
 """Invitation-only pilot signup and capability-scoped service APIs."""
 from __future__ import annotations
 import hmac
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Literal
@@ -283,6 +284,8 @@ class FounderImport(Email):
 def founder(body:FounderImport,session:Session=Depends(get_session)):
     """Adopt a rehearsed runtime; never reads or copies private volume contents."""
     pilot_available();lock_capacity(session)
+    founder_image=get_settings().pilot_founder_image
+    if not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}",founder_image):raise HTTPException(503,"immutable founder-compatible image must be configured before import")
     existing=session.get(PilotRuntime,body.tenant_id)
     if existing:
         if existing.scope_id!=body.conversation_id: raise HTTPException(409,"founder already imported with a different scope")
@@ -295,7 +298,7 @@ def founder(body:FounderImport,session:Session=Depends(get_session)):
     account.tenant_id=body.tenant_id;account.display_name=body.display_name;account.timezone=body.timezone;account.consent_version=body.consent_version;account.consent_at=utcnow()
     tenant=session.get(Tenant,body.tenant_id)
     if tenant is None: tenant=Tenant(id=body.tenant_id,email=body.email)
-    tenant.railway_service_id=body.service_id;tenant.railway_volume_id=body.volume_id;tenant.railway_service_name=body.service_name;tenant.internal_url=body.internal_url;tenant.dek_set=True
+    tenant.railway_service_id=body.service_id;tenant.railway_volume_id=body.volume_id;tenant.railway_service_name=body.service_name;tenant.internal_url=body.internal_url;tenant.dek_set=True;tenant.image_ref=founder_image
     session.add(tenant);session.add(account);session.flush()
     session.add(PilotAdmission(account_id=account.id,state="accepted",reserved_until=utcnow(),accepted_at=utcnow()))
     session.add(PilotRuntime(id=tenant.id,owner_tenant_id=tenant.id,scope_id=body.conversation_id))

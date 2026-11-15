@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     pilot_model_proxy_url: str = ""
     pilot_whatsapp_number: str = ""
     pilot_founder_backup_bucket: str = ""
+    pilot_founder_image: str = ""
     messaging_base_url: str = ""
     messaging_service_token: str = ""
     control_messaging_service_token: str = ""

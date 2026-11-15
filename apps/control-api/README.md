@@ -154,3 +154,11 @@ requests alone never change entitlement or funding.
 Run `python -m control_api.pilot_migrations` before deploying revision 2. It adds
 only the explicitly allowlisted `pilotextension` audit table and revision marker;
 it neither rewrites existing tables nor performs a silent schema alteration.
+
+Founder import additionally requires `PILOT_FOUNDER_IMAGE` as an immutable
+`repository@sha256:<64 hex>` reference. Its compatibility image preserves the
+verified founder Hindsight version; new customers and new group runtimes always
+use `TENANT_IMAGE`. There is no fallback from a missing founder image to a newer
+schema. All pilot runtimes pin BGE-small-en-v1.5 local embeddings (384 dimensions)
+and RRF re-ranking across LLM-provider changes. Equal vector dimensions alone do
+not make a different embedding model compatible with existing memory.
