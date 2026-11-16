@@ -403,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(404, {"error": "not found"})
             return
         peer = (self.client_address or ("",))[0]
-        if peer not in ("127.0.0.1", "::1"):
+        if not _is_loopback(self.client_address):
             log("rejected non-loopback /internal/llm-connected")
             self._respond(403, {"error": "forbidden"})
             return
@@ -573,6 +573,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - stdlib naming
         path = self.path.split("?", 1)[0]
+
+        if os.environ.get("SQUIRE_RUNTIME_ID") and path.startswith("/events"):
+            from squire_overlay.http import handle
+            if handle(self,path): return
 
         # Public-domain gate (see do_GET). A forged Telegram update arriving
         # via the public domain — even with a stolen delivery secret — is the
@@ -818,7 +822,12 @@ def main() -> int:
         # this only fires if the shim is run standalone.
         log("warning: TELEGRAM_WEBHOOK_SECRET is empty — forwarded requests will be unsigned")
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    class DualStackServer(ThreadingHTTPServer):
+        address_family = socket.AF_INET6
+        def server_bind(self):
+            self.socket.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)
+            super().server_bind()
+    server = DualStackServer(("::", PORT), Handler)
     server.daemon_threads = True
     log(
         f"listening on 0.0.0.0:{PORT}{WEBHOOK_PATH} -> "

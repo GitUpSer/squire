@@ -1,0 +1,16 @@
+--- a/hermes_cli/container_boot.py
++++ b/hermes_cli/container_boot.py
+@@ -348,6 +348,13 @@
+ 
+ def main() -> int:
+     """Entry point invoked from /etc/cont-init.d/02-reconcile-profiles."""
++    # SQUIRE_SINGLE_GATEWAY_OWNER: Squire's validated entrypoint and supervisord
++    # own the gateway. Replaying old s6 intent here would start a second gateway
++    # before volume adoption, scoped configuration, and secret unsealing.
++    if os.environ.get("SQUIRE_RUNTIME_ID"):
++        print("reconcile: skipping (Squire supervisord owns the gateway)")
++        return 0
++
+     # A dashboard-only container must not reconcile: with a shared bind-mounted HERMES_HOME both
+     # containers race to flock() the same s6-log files → "Resource busy" restart storm. Detected
+     # from PID 1 argv, not an operator flag (a flag can be forgotten in a hand-written manifest).

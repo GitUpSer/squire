@@ -1,0 +1,9 @@
+# Immutable pilot baseline. Old 8.3 volumes require a rehearsed state migration.
+base_repo: https://github.com/NousResearch/hermes-agent.git
+base_tag: v2026.9.24
+base_commit: f97608f178
+base_digest: sha256:2fd023efbb8d3d2b0ce1a73d028b07370cff34f567cfe0e999553e8c327ea283
+base_hermes_version: 0.21.5
+plugin_key: squire-overlay
+plugin_version: 0.4.0
+rollback_floor: v2026.9.24

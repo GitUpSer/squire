@@ -4,8 +4,8 @@ name: tenant-image
 #
 # - On a pull_request touching tenant-image/**: build only (no push). Sanity-checks
 #   that the Dockerfile still builds before merge.
-# - On push of a tag matching tenant-image-v* (e.g. tenant-image-v0.1.0): build AND
-#   push to GHCR, tagged with the version from the git tag plus `latest`.
+# - On tenant-pilot-v* tags: push only to the separate pilot repository with
+#   explicit version and commit tags. Never publish latest or upgrade the fleet.
 #
 # NOTE (Task 0.1, Phase 0): tenant-image/ is currently an empty placeholder
 # (tenant-image/Dockerfile does not exist yet — it lands in Task 0.2). Every job
@@ -17,7 +17,7 @@ name: tenant-image
 on:
   push:
     tags:
-      - "tenant-image-v*"
+      - "tenant-pilot-v*"
   pull_request:
     paths:
       - "tenant-image/**"
@@ -29,14 +29,24 @@ on:
       # must re-run this workflow -- that drift is what made every provisioned
       # tenant undeployable once already.
       - "apps/control-api/src/control_api/config.py"
+      - "infra/pilot_*.py"
+      - "infra/test_pilot_*.py"
+      - "infra/migrate_personal_agent.py"
+      - "infra/test_migrate_personal_agent.py"
+      - "infra/install_age.py"
 
 env:
   # ghcr.io/<org>/<repo>/<image-name>
-  IMAGE_NAME: ghcr.io/shagarwal/squire/hermes-tenant
+  IMAGE_NAME: ghcr.io/gitupser/squire/hermes-tenant-pilot
 
 jobs:
   build:
+    needs: patch-overlay-check
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [standard, founder]
     permissions:
       contents: read
       packages: write
@@ -64,16 +74,18 @@ jobs:
       - name: Determine image tags
         if: steps.dockerfile-check.outputs.exists == 'true'
         id: meta
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
+          SUFFIX=""
+          if [[ "$VARIANT" == "founder" ]]; then SUFFIX="-founder"; fi
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            # Strip the "tenant-image-v" prefix to get the bare version, e.g.
-            # tenant-image-v0.1.0 -> 0.1.0
-            VERSION="${GITHUB_REF_NAME#tenant-image-v}"
-            echo "tags=${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+            VERSION="${GITHUB_REF_NAME#tenant-pilot-v}"
+            echo "tags=${IMAGE_NAME}:${VERSION}${SUFFIX},${IMAGE_NAME}:git-${GITHUB_SHA}${SUFFIX}" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
             # pull_request build: no registry push, just prove it builds.
-            echo "tags=${IMAGE_NAME}:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE_NAME}:pr-${{ github.event.number }}${SUFFIX}" >> "$GITHUB_OUTPUT"
             echo "push=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -96,8 +108,12 @@ jobs:
           context: tenant-image/
           push: ${{ steps.meta.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: HINDSIGHT_VARIANT=${{ matrix.variant }}
+          cache-from: |
+            type=gha,scope=buildkit
+            type=gha,scope=tenant-${{ matrix.variant }}
+          cache-to: type=gha,scope=tenant-${{ matrix.variant }},mode=max
+          platforms: linux/amd64
 
   # ==========================================================================
   # Patch-overlay + container-contract checks (added in Task 0.2)
@@ -126,6 +142,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout exact upstream source for behavioral patch verification
+        uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: f97608f178d1ffeca59860195ab7da295f7c8e5f
+          path: .upstream/hermes
+
       # Explicit interpreter + venv-free installs. `python3 -m pip install` into
       # the runner's system Python fails on PEP 668 images ("externally-managed
       # environment"), and PyYAML's presence on the runner is an assumption that
@@ -133,7 +156,27 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
+
+      - name: Verify patches against actual pinned source
+        run: python3 tenant-image/patches/compatibility.py .upstream/hermes
+
+      - name: Verify scoped runtime adapter against actual pinned source
+        env:
+          HERMES_SOURCE: ${{ github.workspace }}/.upstream/hermes
+        run: |
+          python -m pip install -r tenant-image/overlay/requirements-test.lock
+          python -m pip install --no-deps -e tenant-image/overlay/plugin
+          python -m pytest tenant-image/overlay/tests tenant-image/tests/test_restored_home.py tenant-image/tests/test_pg0_prestart.py -q --disable-warnings --maxfail=2
+
+      - name: Verify founder transforms and encrypted backup restoration
+        env:
+          HERMES_SOURCE: ${{ github.workspace }}/.upstream/hermes
+          SQUIRE_TEST_AGE_DIR: /usr/local/bin
+        run: |
+          sudo python3 infra/install_age.py --with-keygen
+          export PYTHONPATH="${GITHUB_WORKSPACE}/infra:${HERMES_SOURCE}"
+          python -m pytest infra/test_migrate_personal_agent.py infra/test_pilot_backup_worker.py infra/test_pilot_integration_backup.py infra/test_pilot_restore_drill.py infra/test_pilot_hindsight_upgrade.py infra/test_pilot_founder_transform.py infra/test_pilot_session_provenance.py infra/test_pilot_founder_canary.py tenant-image/tests/test_backup_prepare.py -q --disable-warnings
 
       # Same graceful-skip contract as the build job: this workflow must not go
       # red on a branch where tenant-image/ is still a placeholder.

@@ -1,0 +1,9 @@
+FROM python:3.13-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY apps/messaging/pyproject.toml ./pyproject.toml
+COPY apps/messaging/requirements.lock ./requirements.lock
+COPY apps/messaging/src ./src
+RUN pip install --no-cache-dir -r requirements.lock && pip install --no-cache-dir --no-deps . && useradd --create-home --uid 10001 messaging
+USER messaging
+CMD ["squire-messaging-worker"]

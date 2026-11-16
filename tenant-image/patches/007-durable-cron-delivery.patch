@@ -1,0 +1,21 @@
+--- a/cron/scheduler_delivery.py
++++ b/cron/scheduler_delivery.py
+@@ -1903,7 +1903,17 @@
+     return msg
+ 
+ 
+-def _deliver_result(
++def _deliver_result(job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False) -> Optional[str]:
++    # SQUIRE_DURABLE_CRON_DELIVERY: carry the persisted occurrence through both
++    # live and standalone sends; contextvars also cross the existing thread lane.
++    if os.environ.get("SQUIRE_RUNTIME_ID"):
++        from squire_overlay.scheduled import delivery_scope
++        with delivery_scope(job, for_failure=for_failure):
++            return _deliver_result_scoped(job, content, adapters, loop, for_failure=for_failure)
++    return _deliver_result_scoped(job, content, adapters, loop, for_failure=for_failure)
++
++
++def _deliver_result_scoped(
+     job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False
+ ) -> Optional[str]:
+     """Deliver job output to the configured target(s). With ``adapters``/``loop`` (gateway

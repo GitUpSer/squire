@@ -1,0 +1,26 @@
+# Root-owned managed baseline, retained in every compatible rollback image.
+plugins:
+  enabled:
+    - squire-overlay
+  disabled: []
+  entries:
+    squire-overlay:
+      settings:
+        guardrails:
+          enforcement: true
+          resource_scope: false
+          browser_capacity: 1
+          lease_max_queue: 8
+          lease_wait_s: 90
+          notify_groups: false
+telegram:
+  gateway_restart_notification: false
+compression:
+  codex_gpt55_autoraise_notice: false
+logging:
+  level: WARNING
+display:
+  platforms:
+    squire:
+      streaming: false
+      tool_progress: off

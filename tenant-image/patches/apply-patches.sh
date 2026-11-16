@@ -2,9 +2,8 @@
 #
 # apply-patches.sh — apply Squire's hermes-agent patch overlay at image build.
 #
-# Productized from the founder's ~/.hermes/patches/apply-patches.sh, per
-# docs/reference/hermes-update-plan-v2026.8.3.md §Phase 4. Differences from the
-# VPS original, all deliberate:
+# Applies only top-level active patches. retired/ preserves historical patches
+# for the old immutable rollback image and is never traversed.
 #
 #   * Uses `patch(1)`, not `git apply`. The upstream image's .dockerignore
 #     excludes .git, so /opt/hermes is a source tree with no repository —
@@ -88,8 +87,8 @@ for patch_file in "${patches[@]}"; do
 
         echo "apply-patches: FAILED — $name does not apply to $INSTALL_DIR" >&2
         echo "  This almost always means the pinned upstream tag moved and the" >&2
-        echo "  patch needs regenerating. See docs/reference/hermes-update-plan-" >&2
-        echo "  v2026.8.3.md §Phase 8 (regenerate any patch whose anchors changed)." >&2
+        echo "  patch needs regenerating against the exact Dockerfile-pinned source." >&2
+        echo "  Run patches/compatibility.py against that pristine source." >&2
         patch -p1 --batch --forward --dry-run \
             --directory="$INSTALL_DIR" --input="$patch_file" >&2 || true
         exit 1

@@ -59,7 +59,8 @@ def init_db() -> None:
     # Import for the side effect of registering the tables on SQLModel.metadata.
     from control_api import models  # noqa: F401
 
-    SQLModel.metadata.create_all(get_engine())
+    from control_api.pilot_migrations import migrate
+    migrate(get_engine())
 
 
 @contextmanager

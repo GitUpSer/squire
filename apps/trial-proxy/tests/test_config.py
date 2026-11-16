@@ -4,7 +4,7 @@ Scope, deliberately narrow: this is a static config-sanity check, NOT an
 integration test. It asserts the file is valid YAML and that the specific
 settings this task's brief called out as critical are present and set to
 the values we reasoned through in config.yaml's comments (privacy: no
-message-content retention; auth/DB wiring; the $2-budget-enabling settings;
+message-content retention; auth/DB wiring; the $10-budget-enabling settings;
 model mapping). It makes no network calls and does not start a proxy.
 
 No litellm-package config-load smoke test: `litellm` is a large dependency
@@ -156,7 +156,7 @@ def test_no_model_list_entry_reaches_an_opus_class_model(config):
     instruction-following and a small model ignoring the concierge directive is
     what produced the first live tenant's two-line greeting). The GUARD's intent
     is unchanged and still load-bearing -- a trial tenant must never be able to
-    reach an Opus-class model and drain the $2 cap in a couple of calls -- so
+    reach an Opus-class model and drain the $10 cap in a couple of calls -- so
     the ceiling moved rather than disappeared. Anything above Sonnet is banned.
     """
     banned = ("opus",)
@@ -183,7 +183,7 @@ def test_general_settings_database_url_wired_to_env(config):
     gs = config.get("general_settings", {})
     assert gs.get("database_url") == "os.environ/DATABASE_URL", (
         "general_settings.database_url must be os.environ/DATABASE_URL -- "
-        "virtual keys (and therefore the $2 per-tenant budget) require "
+        "virtual keys (and therefore the $10 per-tenant budget) require "
         "LiteLLM's Postgres-backed key store; without this, control-api's "
         "POST /key/generate calls have nothing to persist a tenant's key, "
         "budget, or spend to"
@@ -234,12 +234,12 @@ def test_fail_closed_on_db_unavailable(config):
     assert gs.get("allow_requests_on_db_unavailable") is False, (
         "general_settings.allow_requests_on_db_unavailable must be false "
         "(fail closed) -- see config.yaml's comments on why fail-open here "
-        "would defeat the $2 hard-budget guarantee"
+        "would defeat the $10 hard-budget guarantee"
     )
 
 
 def test_no_global_budget_reset_cadence_configured(config):
-    """The trial's $2 cap is a flat, one-time budget across the whole 72h
+    """The trial's $10 cap is a flat, one-time budget across the whole 72h
     trial -- NOT a recurring daily/monthly allowance. A proxy-wide
     default_team_params.budget_duration (or similar reset cadence) would
     silently refill a tenant's budget out from under control-api's
@@ -249,25 +249,15 @@ def test_no_global_budget_reset_cadence_configured(config):
     default_team_params = gs.get("default_team_params", {}) or {}
     assert "budget_duration" not in default_team_params, (
         "do not set a proxy-wide budget_duration default -- the trial's "
-        "$2 cap must not be reset on a recurring cadence; budget_duration "
+        "$10 cap must not be reset on a recurring cadence; budget_duration "
         "(or deliberately omitting it) belongs at key-creation time in "
         "control-api's POST /key/generate call, not here"
     )
 
 
-def test_entrypoint_binds_dual_stack_for_railway_private_networking():
-    """Railway private DNS answers with IPv6; a 0.0.0.0 bind is IPv4-only.
-
-    Observed live 2026-08-09: control-api -> trial-proxy.railway.internal
-    connected over IPv6 got ECONNREFUSED while IPv4 succeeded, because litellm
-    defaults to --host 0.0.0.0. httpx/anyio clients mask this by retrying the
-    next address, so it only shows up as a wasted connection per request (and a
-    hard failure for any client without fallback). Pin the dual-stack bind.
-    """
+def test_entrypoint_preserves_cli_with_explicit_dual_stack_socket():
     dockerfile = (CONFIG_PATH.parent / "Dockerfile").read_text()
-    entrypoint = [ln for ln in dockerfile.splitlines() if ln.startswith("ENTRYPOINT")]
-    assert entrypoint, "trial-proxy Dockerfile must define an ENTRYPOINT"
-    assert '"--host", "::"' in entrypoint[-1], (
-        "litellm must bind :: (dual-stack) so Railway private-network clients "
-        f"reaching it over IPv6 are served; got: {entrypoint[-1]}"
-    )
+    assert 'ENTRYPOINT ["python", "/app/serve.py"]' in dockerfile
+    launcher = (CONFIG_PATH.parent / "serve.py").read_text()
+    assert "from litellm.proxy.proxy_cli import run_server" in launcher
+    assert "dualstack_ipv6=True" in launcher

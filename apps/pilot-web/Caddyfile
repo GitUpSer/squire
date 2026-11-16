@@ -1,0 +1,26 @@
+{
+    admin off
+    auto_https off
+}
+:{$PORT:8080} {
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Cache-Control no-store
+    }
+    @customer path /api/v1/auth/* /api/v1/me /api/v1/trial /api/v1/trial/extension /api/v1/trial/resume /api/v1/phone/* /api/v1/groups/* /api/v1/account/state /api/v1/approvals /api/v1/approvals/*
+    handle @customer {
+        uri strip_prefix /api
+        reverse_proxy {$CONTROL_API_UPSTREAM:control-api.railway.internal:8080}
+    }
+    handle /api/* {
+        respond 404
+    }
+    handle {
+        root * /srv
+        file_server
+    }
+}

@@ -269,10 +269,9 @@ chmod 0600 "$tmp"
     # sees the tenant's conversations — their connected LLM provider — never a
     # third party of ours. Anthropic has no embeddings API, so anthropic and
     # trial tenants keep the local model (RAM instead of disclosure).
-    # Dimensions pinned to 384 = the local bge-small dimension: hindsight
-    # refuses to boot on a dimension change over a non-empty vector table, so
-    # 384 is what makes flipping providers mid-life safe. (text-embedding-3
-    # supports truncation to 384.)
+    # Equal dimensions do NOT imply compatible vector spaces. Pilot runtimes
+    # pin the original local model across LLM-provider changes. Legacy runtimes
+    # retain their existing behavior below until individually migrated/reindexed.
     # ChatGPT tenants deliberately get NO embeddings block despite hindsight
     # shipping an openai-codex embeddings provider. VERIFIED LIVE 2026-08-20
     # (tenant 1ctest7): the subscription OAuth token AUTHENTICATES against
@@ -282,7 +281,14 @@ chmod 0600 "$tmp"
     # failure, not a graceful fallback. Local model it is. (The codex LLM is
     # different: it talks to the ChatGPT backend, which the subscription DOES
     # cover — dry-run-extract verified live the same day.)
-    if [ "$provider" = "openai" ] && [ -z "$base" ]; then
+    if [ "${SQUIRE_PRESERVE_LOCAL_EMBEDDINGS:-false}" = "true" ]; then
+        # Source founder identity verified: BGE-small-en-v1.5 emits 384 dimensions.
+        # Local-provider dimensions come from this exact model, not an OpenAI
+        # truncation setting. Re-ranking also preserves the source RRF policy.
+        echo "HINDSIGHT_API_EMBEDDINGS_PROVIDER=local"
+        echo "HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL=BAAI/bge-small-en-v1.5"
+        echo "HINDSIGHT_API_RERANKER_PROVIDER=rrf"
+    elif [ "$provider" = "openai" ] && [ -z "$base" ]; then
         # Only for a PLAIN OpenAI key. A custom OPENAI_BASE_URL means an
         # OpenAI-compatible endpoint that may well not serve /v1/embeddings —
         # fail toward the local model, not toward runtime embedding errors.

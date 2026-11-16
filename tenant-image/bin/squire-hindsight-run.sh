@@ -2,8 +2,7 @@
 #
 # squire-hindsight-run.sh — supervisord's exec target for the memory daemon.
 #
-# A one-line wrapper with a specific job: re-read the LLM credentials from
-# squire-hindsight-env.sh's output at every (re)start.
+# Re-read LLM credentials and verify embedded PostgreSQL ownership on restart.
 #
 # supervisord hands each program the environment IT was started with, frozen at
 # supervisord's own launch. So `supervisorctl restart hindsight` would otherwise
@@ -21,6 +20,7 @@ set -uo pipefail
 TMPFS_DIR="${SQUIRE_SECRETS_TMPFS:-/dev/shm/squire}"
 LLM_ENV="${SQUIRE_HINDSIGHT_ENV_FILE:-$TMPFS_DIR/hindsight-llm.env}"
 HINDSIGHT_BIN="${SQUIRE_HINDSIGHT_BIN:-/opt/squire/hindsight-venv/bin/hindsight-api}"
+HINDSIGHT_PYTHON="${SQUIRE_HINDSIGHT_PYTHON:-/opt/squire/hindsight-venv/bin/python}"
 
 if [ -f "$LLM_ENV" ]; then
     # `set -a` so every assignment in the file is exported to the daemon.
@@ -35,4 +35,4 @@ else
         "$LLM_ENV"
 fi
 
-exec "$HINDSIGHT_BIN"
+exec "$HINDSIGHT_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/squire-pg0-prestart.py" "$HINDSIGHT_BIN"

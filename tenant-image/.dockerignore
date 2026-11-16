@@ -1,31 +1,39 @@
-# Build context is tenant-image/ (see .github/workflows/tenant-image.yml).
-# Keep it tiny -- everything here is COPYed into the image, so anything that
-# sneaks in is shipped to every tenant.
-
-# Never ship secrets, even by accident. The image builds credentials at
-# runtime from SQUIRE_DEK; there is no legitimate reason for any of these to
-# be in the build context.
-.env
-.env.*
-*.pem
-*.key
-auth.json
-
-# Editor / OS cruft
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.swp
-
-# Python bytecode from any local test run
-__pycache__/
-*.py[cod]
-
-# Local scratch
-*.log
-.tmp/
-
-# Tests run in CI against the source tree, never inside the image. Keeping them
-# out of the build context also means editing a test cannot bust the build cache.
-tests/
+# Explicit allowlist; build context is tenant-image/.
+**
+!Dockerfile
+!.dockerignore
+!supervisord.conf
+!browser/
+!browser/package.json
+!browser/package-lock.json
+!browser/harden.py
+!browser/smoke.py
+!hindsight/
+!hindsight/smoke.py
+!bin/
+!bin/**
+!home-template/
+!home-template/**
+!patches/
+!patches/*.sh
+!patches/*.patch
+!patches/markers.tsv
+!patches/compatibility.py
+!overlay/
+!overlay/overlay.yaml
+!overlay/plugin/
+!overlay/plugin/**
+!overlay/managed/
+!overlay/managed/**
+!overlay/gate/
+!overlay/gate/**
+# Secrets and transient files remain excluded even inside an allowed directory.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/auth.json
+**/__pycache__/**
+**/*.py[cod]
+**/*.log
+**/*.egg-info/**

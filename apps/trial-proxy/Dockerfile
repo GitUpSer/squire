@@ -88,6 +88,8 @@ WORKDIR /app
 # os.environ/* reference resolved from Railway service variables at
 # container start), so it's safe to ship inside the image layer.
 COPY config.yaml /app/config.yaml
+COPY serve.py /app/serve.py
+COPY pilot_limits.py /app/pilot_limits.py
 
 # PORT / NUM_WORKERS: litellm's own CLI (`litellm/proxy/proxy_cli.py`)
 # declares `--port` with `envvar="PORT"` (default 4000) and `--num_workers`
@@ -117,16 +119,6 @@ EXPOSE 4000
 # tag before assuming it exists) if/when this proxy's threat model calls for
 # it. Not done here to keep this task's scope to what was asked.
 #
-# Exec-form, no shell wrapper: litellm becomes PID 1 directly and receives
-# SIGTERM from Railway's redeploy/stop directly, so it can drain in-flight
-# requests instead of being SIGKILLed. (See point 1 in the version-pin
-# comment above for how this matches the base image's own entrypoint
-# behavior.)
-# --host "::" (NOT the 0.0.0.0 default): Railway's private DNS returns an
-# IPv6 address for <service>.railway.internal, and a process bound to
-# 0.0.0.0 is IPv4-only, so every private-network client gets ECONNREFUSED
-# on IPv6 first. httpx/anyio callers silently recover by retrying IPv4
-# (which is why this was invisible until a raw-socket probe on 2026-08-09),
-# but it costs a failed connection per request and breaks clients without
-# fallback. "::" accepts both families via dual-stack.
-ENTRYPOINT ["litellm", "--config", "/app/config.yaml", "--host", "::"]
+# Preserve the upstream CLI and Prisma migration path, but supply an explicit
+# IPV6_V6ONLY=0 listener: asyncio's host="::" is IPv6-only on Linux.
+ENTRYPOINT ["python", "/app/serve.py"]
