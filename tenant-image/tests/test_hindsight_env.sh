@@ -228,7 +228,7 @@ cat > "$T/fake-hindsight" <<'F'
 echo "PROVIDER=$HINDSIGHT_API_LLM_PROVIDER KEY=$HINDSIGHT_API_LLM_API_KEY"
 F
 chmod +x "$T/fake-hindsight"
-wrapped="$(SQUIRE_HINDSIGHT_BIN="$T/fake-hindsight" bash "$BIN/squire-hindsight-run.sh" 2>&1)"
+wrapped="$(SQUIRE_HINDSIGHT_BIN="$T/fake-hindsight" SQUIRE_HINDSIGHT_PYTHON=python3 HINDSIGHT_API_DATABASE_URL=postgresql://fixture bash "$BIN/squire-hindsight-run.sh" 2>&1)"
 ck "wrapper exports creds to the daemon" \
   "$(echo "$wrapped" | grep -q 'PROVIDER=anthropic KEY=sk-ant-super-secret' && echo 1 || echo 0)" "$wrapped"
 

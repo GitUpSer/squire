@@ -167,7 +167,7 @@ jobs:
         run: |
           python -m pip install -r tenant-image/overlay/requirements-test.lock
           python -m pip install --no-deps -e tenant-image/overlay/plugin
-          python -m pytest tenant-image/overlay/tests tenant-image/tests/test_restored_home.py -q --disable-warnings --maxfail=2
+          python -m pytest tenant-image/overlay/tests tenant-image/tests/test_restored_home.py tenant-image/tests/test_pg0_prestart.py -q --disable-warnings --maxfail=2
 
       - name: Verify founder transforms and encrypted backup restoration
         env:

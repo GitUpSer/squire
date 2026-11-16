@@ -255,6 +255,7 @@ RUN case "$HINDSIGHT_VARIANT" in \
 RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
         'hindsight-client==0.10.3'
 COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
+COPY bin/squire-pg0-prestart.py /opt/squire/bin/squire-pg0-prestart.py
 RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py
 
 # ---------------------------------------------------------------------------
@@ -451,6 +452,7 @@ RUN /opt/squire/venv/bin/python -m py_compile \
         /opt/squire/bin/squire-restored-home.py \
         /opt/squire/bin/squire-webhook-shim.py \
         /opt/squire/bin/squire-hindsight-healthcheck.py \
+        /opt/squire/bin/squire-pg0-prestart.py \
         /opt/squire/bin/squire-heartbeat.py \
         /opt/squire/bin/squire-concierge-hook.py \
         /opt/squire/bin/squire_connect.py \
