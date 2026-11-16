@@ -344,3 +344,43 @@ while ports 58747 and 58748 were deliberately occupied: three synthetic requests
 shared team spend 11.52, subsequent 429 budget denial, output capped at 8192,
 no persisted prompt bodies, and zero paid provider calls. CI is rerun for this
 harness-only correction; there is no production redeployment for it.
+
+
+## Live credential and cold-canary follow-up
+
+The user-provided GitHub credential was retrieved after reconnecting the browser,
+verified as `read:packages` only, and successfully fetched both immutable runtime
+manifests. It is installed in the two control services; the registry credential
+is not injected into tenant environments. Control API deployment
+`6e011ce4-8298-48c2-a7a3-237bac99dce9` and worker deployment
+`a4e0fa23-674e-47ff-bd6f-99534e553f86` reached SUCCESS with admission/workers
+still disabled. The user-identified Anthropic key in ignored `env.ignore` is
+identical to the already deployed key; both read-only validation endpoints
+returned 401 `invalid x-api-key`. A replacement was requested, without exposing
+it or spending tokens. The second tester invitation is saved privately and has
+not been delivered or consumed a seat.
+
+A private standard canary was created as service
+`2dc2ff7e-aa9e-4b1f-b028-673a90702b66`, volume
+`60faaf0d-acc1-4212-adc4-461939c5e3fc` at `/opt/data`. It has no production
+broker binding, no model key, no account socket, and unreachable loopback
+broker/control URLs. Deployment `21d854a8-e0aa-450a-b92a-59cba2de13c4` pulled rc7
+successfully and verified memory/browser/web health, exact package versions,
+sealed credentials, mounted storage, and empty queues. Its gateway failed the
+actual startup parser because `home_channel.platform` was absent. The gateway
+was stopped while both new-runtime and founder configuration writers were fixed;
+168 actual-source overlay/transform tests now pass, including the reproduced
+startup-parser regression for DM and group runtimes.
+
+A separate actual-source investigation found that persisted running intent could
+let upstream s6 start another gateway before Squire's validated entrypoint.
+Patch 008, first built as rc8, skips that reconciliation only for scoped Squire
+runtimes; all six actual-source behavior gates pass and legacy behavior remains.
+The combined rc9 candidate must pass its build and actual cold-start/restart
+checks before replacing the configured rc7 images. Neither rc7 nor rc8 is
+accepted as the final provisioning image on this evidence.
+
+An empty founder-canary service `59d36ae4-d735-4eca-ae2b-629d48860e57` with
+20-GiB volume `d9bd5001-b920-4969-99e7-8d28c6e06b31` is reserved for the scoped
+restore rehearsal. It has no image yet and its start command is `sleep infinity`.
+No source credentials, source agent state, or live routing has been changed.

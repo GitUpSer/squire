@@ -74,6 +74,26 @@ def test_real_plugin_registration_and_named_session(hermes,scope):
     assert {"pre_tool_call","post_tool_call"}<=set(plugin.hooks_registered)
 
 
+@pytest.mark.parametrize("kind",["dm","group"])
+def test_prepared_runtime_loads_with_real_gateway_config(hermes,scope,monkeypatch,kind):
+    import yaml
+    from squire_overlay.bootstrap import prepare
+    from gateway.config import GatewayConfig,Platform,load_gateway_config
+    monkeypatch.setenv("SQUIRE_RUNTIME_KIND",kind)
+    prepare()
+    raw=yaml.safe_load((scope.home/"config.yaml").read_text())
+    # Exercise both the typed parser and the actual startup YAML/env loader.
+    # Plugin discovery alone does not parse HomeChannel's required platform.
+    for config in (GatewayConfig.from_dict(raw),load_gateway_config()):
+        platform=config.platforms[Platform("squire")]
+        assert platform.enabled
+        assert platform.home_channel.platform==Platform("squire")
+        assert platform.home_channel.chat_id==scope.conversation_id
+        assert not platform.gateway_restart_notification
+        assert not platform.typing_indicator
+        assert not any(value.enabled for key,value in config.platforms.items() if key!=Platform("squire"))
+
+
 def test_real_group_tools_block_private_access(hermes,scope,monkeypatch):
     monkeypatch.setenv("SQUIRE_RUNTIME_KIND","group")
     from hermes_cli.plugins import _reset_plugin_managers_for_tests,discover_plugins,get_pre_tool_call_directive

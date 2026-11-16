@@ -184,6 +184,7 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
     transform.prepare_runtime_config(source,target,checksum(source),"opaque-owner",["calendar"],["/opt/data/skills"])
     config=yaml.safe_load(target.read_text())
     assert config["model"]=="owner-model" and set(config["platforms"])=={"squire"}
+    assert config["platforms"]["squire"]["home_channel"]=={"platform":"squire","chat_id":"opaque-owner"}
     assert "whatsapp" not in config and config["hooks"]=={}
     assert config["plugins"]["enabled"]==["squire-overlay"]
     assert config["mcp_servers"]=={"calendar":{"command":"calendar-cli"}}

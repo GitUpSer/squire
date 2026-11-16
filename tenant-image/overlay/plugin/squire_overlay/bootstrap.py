@@ -35,7 +35,7 @@ def prepare():
     cfg=cfg if isinstance(cfg,dict) else {}
     # Disable built-in WhatsApp and all other transports in the isolated service.
     # Only Squire's broker owns a socket to the shared WhatsApp account.
-    cfg["platforms"]={"squire":{"enabled":True,"gateway_restart_notification":False,"typing_indicator":False,"home_channel":{"chat_id":scope.conversation_id}}}
+    cfg["platforms"]={"squire":{"enabled":True,"gateway_restart_notification":False,"typing_indicator":False,"home_channel":{"platform":"squire","chat_id":scope.conversation_id}}}
     cfg["group_sessions_per_user"]=False
     cfg.setdefault("display",{}).setdefault("platforms",{})["squire"]={"streaming":False,"tool_progress":"off"}
     cfg.setdefault("plugins",{})["enabled"]=["squire-overlay"]

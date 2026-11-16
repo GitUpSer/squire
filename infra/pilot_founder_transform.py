@@ -241,7 +241,7 @@ def prepare_runtime_config(source,output,expected_checksum,conversation_id,appro
     require(all(Path(path).is_absolute() and str(path).startswith("/opt/data/") for path in skill_paths),"runtime_skill_path_required")
     tools=(config.get("platform_toolsets") or {}).get("whatsapp")
     config["platform_toolsets"]={"squire":tools} if tools else {}
-    config["platforms"]={"squire":{"enabled":True,"home_channel":{"chat_id":conversation_id},"gateway_restart_notification":False,"typing_indicator":False}}
+    config["platforms"]={"squire":{"enabled":True,"home_channel":{"platform":"squire","chat_id":conversation_id},"gateway_restart_notification":False,"typing_indicator":False}}
     config["plugins"]={"enabled":["squire-overlay"],"disabled":[]};config["hooks"]={}
     for legacy in ("whatsapp","telegram","discord","slack","signal","webhook"):config.pop(legacy,None)
     config.setdefault("skills",{})["external_dirs"]=list(skill_paths)

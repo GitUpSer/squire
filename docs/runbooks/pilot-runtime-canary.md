@@ -28,12 +28,15 @@ The founder backup bucket is `pilot-founder-dm-backups`, ID
 private runtime; a disposable canary must not receive its credentials. The
 shared operations bucket credentials must never enter either runtime.
 
-The pinned upstream `container_boot.main()` currently reconciles persisted
+The unpatched pinned upstream `container_boot.main()` reconciles persisted
 gateway state before Squire's CMD. An actual-source dry-run confirmed that
 `gateway_state=running` or `desired_state=running` starts an s6 gateway even with
 `HERMES_GATEWAY_NO_SUPERVISE=1` and `SQUIRE_RUNTIME_ID` set. An empty cold canary
 is safe for initial inspection, but production promotion/restart acceptance
-requires a Squire-only guard preventing that second supervision owner. Merely
+requires a Squire-only guard preventing that second supervision owner. Patch
+`008-single-gateway-owner.patch` now implements that guard, with an actual-source
+behavior gate that fails on the original source and preserves legacy behavior.
+Publish and verify replacement immutable images before using it. Merely
 passing `--no-supervise` to the later supervisord gateway does not prevent the
 earlier reconciliation. Record the replacement immutable image if this guard
 changes the release. The probe rejects extra gateways and a supposedly fenced
