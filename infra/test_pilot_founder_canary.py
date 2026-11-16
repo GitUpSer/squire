@@ -202,3 +202,14 @@ def test_managed_metadata_never_archived_after_unclean_shutdown(monkeypatch,tmp_
     with pytest.raises(canary.CanaryError,match='managed_cluster_not_cleanly_shutdown'):
         canary.finalize_managed_stop()
     assert metadata.exists()
+
+
+def test_repeated_recall_preserves_first_evidence_file(monkeypatch,tmp_path):
+    monkeypatch.setattr(canary,'PRIVATE',tmp_path)
+    first=canary.save_recall_report({'known_source_fact_recalled':True,'results':51})
+    original=(tmp_path/first['evidence_file']).read_bytes()
+    second=canary.save_recall_report({'known_source_fact_recalled':True,'results':52})
+    assert first['evidence_file'] != second['evidence_file']
+    assert (tmp_path/first['evidence_file']).read_bytes() == original
+    assert json.loads((tmp_path/second['evidence_file']).read_text())['results'] == 52
+    assert (tmp_path/second['evidence_file']).stat().st_mode & 0o777 == 0o600

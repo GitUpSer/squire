@@ -173,6 +173,25 @@ agent's filesystem from this service.
   `HERMES_SKIP_CONFIG_MIGRATION=1`. Preserve the image's founder variant. The
   normal entrypoint validates critical hashes before seeding and records normal
   initialization. Do not create `.squire/initialized` by hand to bypass it.
+- For native startup, clear the temporary Railway start-command override and
+  use the image's default ENTRYPOINT and CMD. Setting only
+  `/opt/squire/bin/squire-entrypoint.sh` as a Railway override bypasses upstream
+  user setup and creates root-owned credential files that the gateway cannot
+  read. Verify the effective command is empty and inspect actual process/file
+  ownership after startup. In this rehearsal, `startCommand: null` did not clear
+  the field; an empty string did. A fresh `serviceInstanceDeploy` applied the
+  changed configuration; redeploying the previous build reused its old `sleep`
+  startup snapshot. Platform SUCCESS alone is not runtime acceptance.
+- For Hindsight 0.5.2 native lifecycle, `pg0://<instance>:<port>` starts the
+  named instance with upstream's `hindsight` database/user/password defaults.
+  Restore into a separately prepared cluster seeded with `postgres`, then create
+  a fresh `hindsight` database for the verified dump. Do not repoint native pg0
+  at a reference cluster with a different user/database or overwrite a seeded
+  database. The scoped `pilot_founder_canary.py` helper preserves the reference
+  cluster and verifies clean managed shutdown plus complete data fingerprints
+  before native handoff. Stale process metadata may be archived only after
+  checking the exact path, dead/zombie PID, absent postmaster.pid, and clean
+  PostgreSQL control state. Never remove live database files to clear a lock.
 - If booting a prepared canary while keeping the gateway fenced, use a reviewed
   temporary supervisord configuration with gateway autostart disabled. The
   metadata probe's `--gateway-fenced` flag skips adapter/gateway readiness; it

@@ -288,7 +288,15 @@ with Hindsight(base_url='http://127.0.0.1:9177',timeout=120) as client:
     report = json.loads(result.stdout)
     report.update(review())
     report.update(embeddings="BAAI/bge-small-en-v1.5", embedding_dimensions=384, reranker="rrf", model_calls=False)
-    private_json(PRIVATE / "recall-report.json", report)
+    return save_recall_report(report)
+
+
+def save_recall_report(report):
+    path = PRIVATE / "recall-report.json"
+    if path.exists():
+        path = PRIVATE / ("recall-report-" + secrets.token_hex(8) + ".json")
+    report = dict(report, evidence_file=path.name)
+    private_json(path, report)
     return report
 
 
