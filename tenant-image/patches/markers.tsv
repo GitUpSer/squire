@@ -20,3 +20,4 @@ patch-006-anchor	plugins/platforms/telegram/adapter.py	async def _bot_identity_r
 squire-006-identity-ttl-env	plugins/platforms/telegram/adapter.py	SQUIRE_TELEGRAM_IDENTITY_TTL	required
 squire-006-identity-skip	plugins/platforms/telegram/adapter.py	Telegram identity refresh disabled	required
 squire-007-cron-delivery	cron/scheduler_delivery.py	SQUIRE_DURABLE_CRON_DELIVERY	required
+squire-008-single-gateway-owner	hermes_cli/container_boot.py	SQUIRE_SINGLE_GATEWAY_OWNER	required

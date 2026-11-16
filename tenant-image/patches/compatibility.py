@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, patch
 PATCHES=Path(__file__).resolve().parent
 FILES=("gateway/run.py","gateway/run_turn.py","gateway/run_shutdown.py",
        "plugins/platforms/telegram/adapter.py","agent/anthropic_adapter.py","utils.py",
-       "cron/scheduler_delivery.py")
+       "cron/scheduler_delivery.py","hermes_cli/container_boot.py")
 
 
 def tree(root,file):return ast.parse((root/file).read_text())
@@ -133,10 +133,41 @@ def upstream_oauth_gate(root):
     assert ns['_oauth_wire_namer']([{'name':'session_search'},{'name':'chat_history_lookup'}])('session_search')=='mcp__session_search'
 
 
+def single_gateway_owner_gate(root):
+    calls=[]
+    def read_argv():
+        calls.append("argv")
+        return ["/opt/squire/bin/squire-entrypoint.sh"]
+    def reconcile(**kwargs):
+        calls.append(("reconcile",kwargs))
+        return []
+    ns={"os":os,"Path":Path,"print":lambda *args:None,
+        "_read_container_argv":read_argv,"_is_dashboard_container":lambda args:False,
+        "reconcile_profile_gateways":reconcile}
+    fn=function(root,"hermes_cli/container_boot.py","main",ns)
+    # No persisted state or named-profile intent may be examined for a Squire
+    # container. This runs before Squire's entrypoint has validated its home.
+    with patch.dict(os.environ,{"SQUIRE_RUNTIME_ID":"scoped-canary","HERMES_GATEWAY_NO_SUPERVISE":"1"}):
+        assert fn()==0 and calls==[]
+    # The guard is scoped to Squire. Merely opting out of upstream supervision
+    # must not disable existing legacy reconciliation or the dashboard guard.
+    for value in (None,""):
+        calls.clear()
+        with patch.dict(os.environ,{"HERMES_GATEWAY_NO_SUPERVISE":"1","HERMES_HOME":"/synthetic/home","S6_PROFILE_GATEWAY_SCANDIR":"/synthetic/scan"}):
+            if value is None:os.environ.pop("SQUIRE_RUNTIME_ID",None)
+            else:os.environ["SQUIRE_RUNTIME_ID"]=value
+            assert fn()==0
+            assert calls==["argv",("reconcile",{"hermes_home":Path("/synthetic/home"),"scandir":Path("/synthetic/scan")})]
+        calls.clear()
+    ns["_is_dashboard_container"]=lambda args:True
+    with patch.dict(os.environ,{"SQUIRE_RUNTIME_ID":""}):
+        assert fn()==0 and calls==["argv"]
+
+
 def check(root):
     subprocess.run(["bash",str(PATCHES/"verify-markers.sh"),str(root)],check=True)
     for file in FILES:compile((root/file).read_text(),str(root/file),"exec")
-    for fn in (status_gate,shutdown_gate,concierge_gate,telegram_gate,upstream_oauth_gate):
+    for fn in (status_gate,shutdown_gate,concierge_gate,telegram_gate,upstream_oauth_gate,single_gateway_owner_gate):
         fn(root);print("PASS actual pinned-source "+fn.__name__)
 
 
