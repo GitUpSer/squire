@@ -16,7 +16,22 @@ URL = "pg0://fixture:55432"
 
 
 @pytest.fixture
-def cluster(tmp_path):
+def owned_processes(monkeypatch):
+    # Unit tests own only this process and explicitly registered children. A
+    # hosted CI runner may contain same-UID protected processes unrelated to the
+    # fixture. Production and the real image smoke retain the full /proc scan.
+    owned={os.getpid()}
+    original=Path.iterdir
+    def entries(path):
+        if path==Path("/proc"):
+            return iter(Path("/proc")/str(pid) for pid in sorted(owned))
+        return original(path)
+    monkeypatch.setattr(Path,"iterdir",entries)
+    return owned
+
+
+@pytest.fixture
+def cluster(tmp_path,owned_processes):
     directory = tmp_path/".pg0/instances/fixture"
     data = directory/"data"
     data.mkdir(parents=True)
@@ -39,10 +54,11 @@ def repair(cluster, versions=("0.12.3","0.5.2")):
 
 
 @pytest.mark.parametrize("versions",[("0.12.3","0.5.2"),("0.15.1","0.9.0")])
-def test_reused_live_unrelated_pid_archives_only_metadata(cluster,versions):
+def test_reused_live_unrelated_pid_archives_only_metadata(cluster,versions,owned_processes):
     home,data,metadata,record = cluster
     before = {str(path.relative_to(data)):path.read_bytes() for path in data.rglob("*") if path.is_file()}
     with subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"]) as unrelated:
+        owned_processes.add(unrelated.pid)
         record["pid"] = unrelated.pid
         body = json.dumps(record).encode()
         metadata.write_bytes(body)
@@ -52,6 +68,7 @@ def test_reused_live_unrelated_pid_archives_only_metadata(cluster,versions):
         finally:
             unrelated.terminate()
             unrelated.wait()
+            owned_processes.remove(unrelated.pid)
     assert not metadata.exists()
     archives = list(metadata.parent.glob("instance.stale-*.json"))
     assert len(archives) == 1 and archives[0].read_bytes() == body
@@ -114,6 +131,17 @@ def test_unreadable_process_fails_closed(cluster,monkeypatch):
     def unreadable(pid): raise guard.StartupError("pg0_process_identity_unreadable")
     monkeypatch.setattr(guard,"process",unreadable)
     with pytest.raises(guard.StartupError,match="unreadable"): repair(cluster)
+    assert cluster[2].exists()
+
+
+def test_process_scan_permission_denial_still_fails_closed(cluster,monkeypatch):
+    original=Path.resolve
+    def resolve(path,*args,**kwargs):
+        if path==Path("/proc")/str(os.getpid())/"exe":raise PermissionError()
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,"resolve",resolve)
+    with pytest.raises(guard.StartupError,match="process_identity_unreadable"):
+        guard.no_live_cluster(cluster[1])
     assert cluster[2].exists()
 
 
