@@ -321,7 +321,12 @@ not assertions the tool manufactures. Required gates are:
 - Restored-image compatibility and private-memory parity.
 - Identity mapping and group isolation, including no private-state copy.
 - Scheduler translation, with the exact source crontab SHA-256.
-- Media parity, first-contact send/receipt, group roundtrip and rollback rehearsal.
+- Media parity, group roundtrip and rollback rehearsal.
+
+Fresh-recipient first contact is a separate customer-readiness gate after
+founder activation and soak. It is not a prerequisite to fencing the source:
+the reserved tester must remain untouched until their website signup. An
+existing founder conversation or synthetic transport test cannot satisfy it.
 
 Current media parity/short disappearing-message TTL and external integration
 parity are not established by these tools. Missing evidence must keep the
@@ -344,6 +349,30 @@ generation consistently, activate the new binding/writer, and record fresh
 Record initial capture checkpoints and any in-flight work disposition in the
 private cutover evidence. Never have both old and new senders active.
 
+Keep wider admission closed after `active`. Record `founder_soak` evidence only
+after at least 24 hours of active founder service. Besides the common report
+identity fields, it requires Unix timestamps `soak_started_at` and
+`soak_completed_at` spanning at least 24 hours after journal `active_at`, and
+true values for `scheduled_job_succeeded`,
+`no_unexplained_duplicate_or_missing_messages`, and `private_group_isolation`.
+Then `advance --stage tester_ready --execute` permits the reserved tester flow.
+Deliver the privately stored invitation and enable admission only for that
+invited test cohort; do not issue further invitations yet. These journal
+commands record readiness and do not themselves change service flags.
+
+After the real website test, record `first_contact` with
+`evidence_kind:"live_website_signup"`, true values for `fresh_recipient`,
+`verified_email`, `phone_consent`, `received_before_first_inbound`, and
+`first_agent_reply_received`, plus `tester_account_sha256` and
+`provider_message_id_sha256` (64-character SHA256 digests, never raw IDs).
+Include Unix timestamps `signup_started_at` and `first_received_at`, both after
+journal `tester_ready_at`. The common migration/image identity fields still
+apply. `advance --stage first_contact_verified --execute` rejects missing
+evidence. Existing-contact sends, synthetic results, and receipts preceding
+tester readiness are rejected. This stage proves the first-contact requirement;
+the second customer's approved-group checks and remaining launch checklist
+still gate wider cohort admission.
+
 Rollback first pauses/revokes the new messaging bindings, scheduled grants,
 transport generation and runtime writer. Record fresh `target_fenced` evidence
 (at most five minutes old), then run `rollback --execute`. It removes only
@@ -354,6 +383,8 @@ and can be retried or rolled back; it does not silently unfreeze on error.
 Do not delete the source or its matching release during the 14-day rollback
 window. Account-wide sender and source service recovery require a deliberate
 operator decision; no automatic rollback starts a second writer.
+Rollback remains available from `tester_ready` and `first_contact_verified`
+under the same fresh target-fence requirement.
 
 ## Validation
 

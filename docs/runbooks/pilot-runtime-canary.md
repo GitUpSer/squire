@@ -10,18 +10,20 @@ operator record. Never store registry credentials or runtime DEKs in this file.
 
 Production project `a97a9074-9f2e-495a-ba19-84594c65acbd`, environment
 `e921611e-edc6-44f6-b538-185da4bd4fa1`. Control API deployment
-`f1dbbff6-f8ee-45ac-a395-55e0e53aa51e` and control worker deployment
-`ab7a3fe7-7a52-4a69-ac8f-4136ea45b7d5` were independently read back as SUCCESS.
+`6e011ce4-8298-48c2-a7a3-237bac99dce9` and control worker deployment
+`a4e0fa23-674e-47ff-bd6f-99534e553f86` were independently read back as SUCCESS.
 Both have the founder image and backup-bucket setting; admission and workers
-were read back disabled by the orchestrator. Registry credentials were not yet
-present at this canary preparation checkpoint.
+were read back disabled by the orchestrator. Private registry pull credentials are installed in both control services and
+canary registry configuration, never tenant environment variables. The table
+below lists rc9 canary candidates; control image settings remain rc7 until the
+founder native lifecycle check passes.
 
 Both images use repository `ghcr.io/gitupser/squire/hermes-tenant-pilot`:
 
 | Variant | Immutable digest | Memory packages |
 | --- | --- | --- |
-| Standard | `sha256:071a77c0a2fd5b2720b6d082a8b47bcc258f4890974f461fc2737bba810572ea` | Hindsight 0.9.0 / pg0 0.15.1 |
-| Founder | `sha256:8570bd6a9803c17c7b631815992782184f16889cd66dedb65e36da58ab3e1c25` | Hindsight 0.5.2 / pg0 0.12.3 |
+| Standard | `sha256:9bb726217f2fd65bf68f64093191e4ad0e91ebe9edf689de2f9c93ce63a90150` | Hindsight 0.9.0 / pg0 0.15.1 |
+| Founder | `sha256:5139a5ad640ced720e35b92b428731c953f4bfa91a6eabb169b4c6ab5671ae6f` | Hindsight 0.5.2 / pg0 0.12.3 |
 
 The founder backup bucket is `pilot-founder-dm-backups`, ID
 `6aa8afe8-e842-41ce-a9ee-2f33d331ed8f`. It is reserved for the actual founder
@@ -36,7 +38,8 @@ is safe for initial inspection, but production promotion/restart acceptance
 requires a Squire-only guard preventing that second supervision owner. Patch
 `008-single-gateway-owner.patch` now implements that guard, with an actual-source
 behavior gate that fails on the original source and preserves legacy behavior.
-Publish and verify replacement immutable images before using it. Merely
+The rc9 images above contain this guard; standard deployed restart verification
+passed with persisted running intent and exactly one gateway. Merely
 passing `--no-supervise` to the later supervisord gateway does not prevent the
 earlier reconciliation. Record the replacement immutable image if this guard
 changes the release. The probe rejects extra gateways and a supposedly fenced
@@ -102,7 +105,7 @@ canary containing any gateway process.
    ```sh
    HOME=/opt/data HERMES_HOME=/opt/data SQUIRE_VOLUME=/opt/data \
      /opt/hermes/.venv/bin/python /tmp/pilot_runtime_canary.py \
-       --variant standard --expected-image 'ghcr.io/gitupser/squire/hermes-tenant-pilot@sha256:071a77c0a2fd5b2720b6d082a8b47bcc258f4890974f461fc2737bba810572ea'
+       --variant standard --expected-image 'ghcr.io/gitupser/squire/hermes-tenant-pilot@sha256:9bb726217f2fd65bf68f64093191e4ad0e91ebe9edf689de2f9c93ce63a90150'
    ```
 
    The probe only reads local metadata and health endpoints. It emits no tokens,

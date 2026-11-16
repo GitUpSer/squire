@@ -26,7 +26,8 @@ FORMAT = "squire-founder-snapshot-v1"
 STATE_SCHEMA = "5bfa84adc1bfd8cbf5427a830707c82e2f63adcaf42ac3f9a51cdb5fb905cfbf"
 SOURCE_RELEASE = "v2026.9.24__be3f3d797"
 GATES = {"restored_image", "private_memory_parity", "scheduler_translation", "identity_map",
-         "group_isolation", "media_parity", "first_contact", "group_roundtrip", "rollback_rehearsal"}
+         "group_isolation", "media_parity", "group_roundtrip", "rollback_rehearsal"}
+CUSTOMER_GATES = {"founder_soak", "first_contact"}
 FENCE_UNITS = ("hermes-stall-recovery.service", "hindsight-healthcheck.timer", "hermes-gateway.service",
                "hindsight-daemon.service", "camofox-server.service")
 SAFE_PART = re.compile(r"^[A-Za-z0-9._-]{1,150}$")
@@ -490,21 +491,48 @@ class Journal:
         return cls(path)
 
     def record_gate(self, name, evidence: Path):
-        require(name in GATES | {"target_fenced", "final_restore", "new_writer_healthy"}, "unknown_gate")
+        require(name in GATES | CUSTOMER_GATES | {"target_fenced", "final_restore", "new_writer_healthy"}, "unknown_gate")
         report = json.loads(evidence.read_text())
         require(report.get("passed") is True and report.get("gate") == name
                 and report.get("migration_id") == self.state["migration_id"]
                 and report.get("target_image_digest") == self.state["target_image_digest"], "gate_evidence_mismatch")
-        self.state["gates"][name] = {"sha256": checksum(evidence), "at": time.time()}
+        now = time.time()
+        if name == "founder_soak":
+            require(self.state["stage"] == "active", "founder_soak_requires_active_writer")
+            started, completed = report.get("soak_started_at"), report.get("soak_completed_at")
+            active = self.state.get("active_at")
+            require(all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                        for value in (started, completed, active))
+                    and active <= started <= completed <= now and completed - started >= 24 * 3600,
+                    "founder_soak_requires_24_hours_after_activation")
+            require(all(report.get(field) is True for field in
+                        ("scheduled_job_succeeded", "no_unexplained_duplicate_or_missing_messages", "private_group_isolation")),
+                    "founder_soak_acceptance_incomplete")
+        if name == "first_contact":
+            require(self.state["stage"] == "tester_ready" and "founder_soak" in self.state["gates"],
+                    "first_contact_requires_tester_ready")
+            require(report.get("evidence_kind") == "live_website_signup"
+                    and all(report.get(field) is True for field in
+                            ("fresh_recipient", "verified_email", "phone_consent", "received_before_first_inbound", "first_agent_reply_received")),
+                    "fresh_website_first_contact_evidence_required")
+            require(all(isinstance(report.get(field), str) and re.fullmatch(r"[0-9a-f]{64}", report[field]) for field in
+                        ("tester_account_sha256", "provider_message_id_sha256")), "first_contact_identity_proof_required")
+            started, received = report.get("signup_started_at"), report.get("first_received_at")
+            ready = self.state.get("tester_ready_at")
+            require(all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                        for value in (started, received, ready))
+                    and ready <= started <= received <= now, "first_contact_must_follow_tester_readiness")
         if name == "scheduler_translation":
             require(re.fullmatch(r"[0-9a-f]{64}", report.get("source_crontab_sha256", "")), "reviewed_crontab_hash_required")
             self.state["source_crontab_sha256"] = report["source_crontab_sha256"]
+        self.state["gates"][name] = {"sha256": checksum(evidence), "at": now}
         atomic_json(self.path, self.state)
 
     def transition(self, stage, details=None):
         allowed = {"preparing": {"fencing"}, "fencing": {"source_fenced", "rolled_back"}, "source_fenced": {"final_snapshot", "rolled_back"},
                    "final_snapshot": {"target_imported", "rolled_back"}, "target_imported": {"active", "rolled_back"},
-                   "active": {"rolled_back"}}
+                   "active": {"tester_ready", "rolled_back"}, "tester_ready": {"first_contact_verified", "rolled_back"},
+                   "first_contact_verified": {"rolled_back"}}
         require(stage in allowed.get(self.state["stage"], set()), "invalid_migration_transition")
         if stage in {"fencing", "source_fenced"}:
             require(GATES <= self.state["gates"].keys(), "migration_gates_incomplete")
@@ -513,6 +541,14 @@ class Journal:
         if stage == "active":
             require("new_writer_healthy" in self.state["gates"], "new_writer_unverified")
             self.state["gates"].pop("target_fenced", None)
+            for name in CUSTOMER_GATES:
+                self.state["gates"].pop(name, None)
+            self.state["active_at"] = time.time()
+        if stage == "tester_ready":
+            require("founder_soak" in self.state["gates"], "founder_soak_unverified")
+            self.state["tester_ready_at"] = time.time()
+        if stage == "first_contact_verified":
+            require("first_contact" in self.state["gates"], "fresh_first_contact_unverified")
         if stage == "rolled_back":
             require("target_fenced" in self.state["gates"], "rollback_requires_target_fence")
             require(time.time() - self.state["gates"]["target_fenced"]["at"] <= 300, "target_fence_evidence_stale")
@@ -572,7 +608,7 @@ def assert_fenced(home: Path, journal: Journal):
 def rollback_source(home: Path, journal: Journal):
     require("target_fenced" in journal.state["gates"], "rollback_requires_target_fence")
     require(time.time() - journal.state["gates"]["target_fenced"]["at"] <= 300, "target_fence_evidence_stale")
-    require(journal.state["stage"] in {"fencing", "source_fenced", "final_snapshot", "target_imported", "active"}, "rollback_wrong_stage")
+    require(journal.state["stage"] in {"fencing", "source_fenced", "final_snapshot", "target_imported", "active", "tester_ready", "first_contact_verified"}, "rollback_wrong_stage")
     for unit in FENCE_UNITS:
         dropin = home / ".config/systemd/user" / (unit + ".d") / "90-squire-migration-fence.conf"
         if dropin.exists():
@@ -635,7 +671,7 @@ def main():
     upload.add_argument("--migration-id", required=True)
     advance = sub.add_parser("advance")
     advance.add_argument("--journal", required=True, type=Path)
-    advance.add_argument("--stage", choices=["target_imported", "active"], required=True)
+    advance.add_argument("--stage", choices=["target_imported", "active", "tester_ready", "first_contact_verified"], required=True)
     advance.add_argument("--execute", action="store_true")
     for name in ("fence", "rollback"):
         action = sub.add_parser(name)

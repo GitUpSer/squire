@@ -20,7 +20,7 @@ The implementation is complete only when all of these have been demonstrated on 
 - [ ] Trial limits, expiry, opt-out, deletion, backup restore, outage reporting, and the 20-seat limit work without direct database edits.
 - [ ] Actual end-to-end delivery is evidenced by receipts or recipient confirmation. A CLI exit code, queued job, HTTP 200, or WhatsApp acceptance is insufficient.
 
-First-contact delivery is an early feasibility gate as well as a final test. If the provider prevents it, record the failed requirement and leave outreach closed. The user-initiated connection fallback is a useful degraded experience, not a substitute for this completion contract. Do not report a fully working signup-first pilot based only on messaging Shaurya, an existing contact.
+First-contact delivery is an early feasibility check when a separate consenting fresh canary exists, and a mandatory final website test. When the only fresh recipient is the reserved second tester, keep this requirement pending until founder activation and the 24-hour soak; it does not block source fencing. If the provider prevents it, record the failed requirement and leave wider outreach closed. The user-initiated connection fallback is a useful degraded experience, not a substitute for this completion contract. Do not report a fully working signup-first pilot based only on messaging Shaurya, an existing contact.
 
 ## 2. Verified starting point and dependencies
 
@@ -245,7 +245,7 @@ Receipt webhooks are also fallible. Reconcile known outgoing message IDs against
 
 ### Media, retention, and session operations
 
-Media downloads happen in transport with allowlisted commands, 20 MiB pilot input limits, verified content type, timeouts, and no user-controlled local paths. Forward opaque, short-lived media capabilities tied to one runtime and conversation. Voice transcription and document/image processing happen within the authorized runtime or its scoped provider path. Unsupported payloads get a bounded explanatory response, not a blank agent turn.
+Media downloads happen in transport with allowlisted commands, 10 MiB pilot input limits, verified content type, timeouts, and no user-controlled local paths. Outbound decoded attachments also have a 10 MiB limit. Forward opaque, short-lived media capabilities tied to one runtime and conversation. Voice transcription and document/image processing happen within the authorized runtime or its scoped provider path. Unsupported payloads get a bounded explanatory response, not a blank agent turn.
 
 Payload retention defaults:
 
@@ -310,7 +310,7 @@ Implement in this order. Each package has a concrete output and an exit gate; do
 
 | Package | Changes and primary files | Exit gate |
 |---|---|---|
-| P0 Inventory and transport feasibility | New `infra/pilot_inventory.py`; live founder inventory; pinned wacli image/broker spike; production resource manifest | Account identity confirmed; authorized first-contact send actually received; group receive/send and authenticated sender fields verified; exact feature/version manifest recorded |
+| P0 Inventory and transport feasibility | New `infra/pilot_inventory.py`; live founder inventory; pinned wacli image/broker spike; production resource manifest | Account identity confirmed; authorized fresh-canary receipt recorded, or first-contact check explicitly deferred to P10 when only the reserved tester is available; group receive/send and authenticated sender fields verified; exact feature/version manifest recorded |
 | P1 Durable transport | New `apps/whatsapp-transport/` with Dockerfile, supervisor, broker, journal reader, receipt reconciliation, retention, health; integration tests using pinned CLI | Lost webhook recovered; restart resumes checkpoint; unknown/expired journal explicit; command-lock behavior tested; no sends while leader fenced |
 | P2 Storage and service authorization | Control migrations/auth modules; new `apps/messaging/` API/worker/model/migration packages; update existing auth consumers | Two independent tenant principals cannot access each other's data or any operator capability; DB failure accepts no unpersisted batch |
 | P3 Runtime foundations | Execute `overlay-phase3-plan.md` prerequisites, then compatible Hermes base migration; `tenant-image/overlay/`, Dockerfile, CI, managed config | Prior canary and fresh tenant pass; rollback image/state restore proven; founder's used features have documented parity |
@@ -322,7 +322,7 @@ Implement in this order. Each package has a concrete output and an exit gate; do
 | P9 Founder migration | New `infra/migrate_personal_agent.py`, import/export manifests, dry run, cutover/rollback journal | Founder private agent and approved groups serving on production; old writers disabled; parity and recovery gates pass |
 | P10 Second customer and cohort | Browser/live test harness, redacted evidence manifest, admissions controls | Second fresh signup passes first-contact and group tests; then admit in rings 2 → 5 → 10 → 20 |
 
-P0 and P1 come first to discover provider limitations before building the whole product. Independent code can be prepared while runtime work proceeds, but deployment order and migration gates stay sequential. If no separate fresh canary number is available, reserve the second tester for P7's website flow, mark first-contact feasibility pending, and allow reversible implementation to continue; do not open admission or claim the completion contract until that test passes. The implementation does not require multiple agents.
+P0 and P1 come first to discover provider limitations before building the whole product. Independent code can be prepared while runtime work proceeds, but deployment order and migration gates stay sequential. If no separate fresh canary number is available, reserve the second tester for P10 using P7's website flow and mark first-contact feasibility pending. Founder migration may proceed once its separate parity, isolation, scheduler, media, group and rollback prerequisites pass. After founder activation and a verified 24-hour soak, allow only the reserved invitation through test admission. Wider admission and the completion contract remain blocked until the live website test and remaining acceptance checks pass. The implementation does not require multiple agents.
 
 ### File-level scope
 
@@ -384,7 +384,7 @@ Memory compatibility includes Hindsight/PostgreSQL versions, memory bank IDs, em
 6. Enable exactly one scheduler per migrated job. Reconcile executions around cutover and keep stable job IDs so a reminder does not fire from both environments.
 7. Enable outbound from the new generation and perform founder checks: DM conversation continuity, known-memory recall, read-only calendar/email/tool task, a supervised side-effect task, voice/media, progress scoping, one scheduled message, an existing approved group, owner approval and explicit group result sharing.
 8. Verify runtime restart and transport reconnect. Record actual message IDs/delivery evidence without recording message content. Keep the old runtime stopped but recoverable.
-9. Founder soak: at least 24 hours with a successful scheduled job, no unexplained duplicate/missing messages, and clean group/private separation before admitting the second customer. Then run the second-customer website test.
+9. Founder soak: at least 24 hours with a successful scheduled job, no unexplained duplicate/missing messages, and clean group/private separation before admitting the second customer. Record the journal's `founder_soak` proof and advance from `active` to `tester_ready`, then deliver the reserved invitation and run the second-customer website test. Record exact live `first_contact` evidence and advance to `first_contact_verified`; this proof cannot be recorded before tester readiness. Wider admission also requires the second customer's approved-group checks and remaining acceptance checklist. Neither journal transition automatically changes service flags.
 
 ### Rollback
 

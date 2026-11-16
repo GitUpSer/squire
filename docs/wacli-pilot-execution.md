@@ -384,3 +384,42 @@ An empty founder-canary service `59d36ae4-d735-4eca-ae2b-629d48860e57` with
 20-GiB volume `d9bd5001-b920-4969-99e7-8d28c6e06b31` is reserved for the scoped
 restore rehearsal. It has no image yet and its start command is `sleep infinity`.
 No source credentials, source agent state, or live routing has been changed.
+
+### rc9 deployed canary evidence
+
+Release `tenant-pilot-v0.4.0-rc9`, commit
+`459f5c6b1da0ff9759d58a2aa3368c6f69b93c37`, passed
+[both image builds](https://github.com/GitUpSer/squire/actions/runs/43815442682),
+[control tests](https://github.com/GitUpSer/squire/actions/runs/43815449109),
+[runtime checks](https://github.com/GitUpSer/squire/actions/runs/43815449223), and
+[pilot acceptance](https://github.com/GitUpSer/squire/actions/runs/43815449077).
+It includes the actual-source gateway ownership guard and the home-channel
+platform parser correction. Both private registry manifests were fetched and
+their immutable digests verified:
+
+| Variant | Digest |
+| --- | --- |
+| Standard | `sha256:9bb726217f2fd65bf68f64093191e4ad0e91ebe9edf689de2f9c93ce63a90150` |
+| Founder | `sha256:5139a5ad640ced720e35b92b428731c953f4bfa91a6eabb169b4c6ab5671ae6f` |
+
+Standard deployment `046e608e-b58b-40e3-84e2-9a428ade3f5b` passed cold startup
+and restart on its dedicated volume. A synthetic event accepted through the real
+ingress remained byte-for-byte unchanged across restart with model readiness
+false. Persisted running gateway intent was deliberately present before restart;
+exactly one gateway started. Profile and initialization hashes were unchanged.
+Cleanup removed only that synthetic event, and a fresh runtime probe confirmed
+zero inbox/outbox/tool rows, live adapter, healthy browser/memory/web services,
+the correct packages and scoped configuration, and tmpfs-backed secret links.
+These checks made no model requests and sent no customer messages.
+
+Founder deployment `92b241d4-7a85-4e34-b1a2-32b9325888a4` pulled the rc9 founder
+image. A positive-list rehearsal home and the verified logical memory dump were
+restored to its isolated volume, without owner credentials or active schedules.
+The real Hermes Hindsight client recalled a known source fact using local BGE
+embeddings and RRF. All 15 table content fingerprints, schema and bank identity,
+and queue counts remained unchanged: 14,324 memories, 1,132 documents, 5,228
+entities, and zero pending/processing operations. This first recall used an
+explicit isolated API/cluster. Normal entrypoint adoption and the native pg0
+restart lifecycle are still separate acceptance checks; the source agent remains
+the live owner. Control provisioning image references remain rc7 until these
+checks are completed; admission, workers, and outbound remain disabled.

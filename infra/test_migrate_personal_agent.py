@@ -86,6 +86,130 @@ def test_gate_evidence_must_match_image_and_migration(tmp_path):
     journal.close()
 
 
+def active_journal(tmp_path, monkeypatch):
+    clock = [100000.0]
+    monkeypatch.setattr(migration.time, "time", lambda: clock[0])
+    journal = migration.Journal.create(tmp_path / "journal.json", "customer-test", "sha256:" + "2" * 64)
+    def record(gate, **fields):
+        proof = tmp_path / (gate + ".json")
+        proof.write_text(json.dumps(dict(gate=gate, migration_id="customer-test", target_image_digest="sha256:" + "2" * 64,
+                                        passed=True, **fields)))
+        journal.record_gate(gate, proof)
+    # Fresh recipient evidence is deliberately absent during founder migration.
+    assert "first_contact" not in migration.GATES
+    for gate in migration.GATES:
+        record(gate, source_crontab_sha256=hashlib.sha256(b"").hexdigest())
+    journal.transition("fencing")
+    journal.transition("source_fenced")
+    journal.transition("final_snapshot")
+    record("final_restore")
+    journal.transition("target_imported")
+    record("new_writer_healthy")
+    journal.transition("active")
+    return journal, clock, record
+
+
+def finish_soak(journal, clock, record):
+    clock[0] = journal.state["active_at"] + 86400
+    record("founder_soak", soak_started_at=journal.state["active_at"], soak_completed_at=clock[0],
+           scheduled_job_succeeded=True, no_unexplained_duplicate_or_missing_messages=True, private_group_isolation=True)
+    journal.transition("tester_ready")
+
+
+def first_contact_fields(clock):
+    return dict(evidence_kind="live_website_signup", fresh_recipient=True, verified_email=True, phone_consent=True,
+                received_before_first_inbound=True, first_agent_reply_received=True, tester_account_sha256="a" * 64,
+                provider_message_id_sha256="b" * 64, signup_started_at=clock[0], first_received_at=clock[0])
+
+
+@pytest.mark.parametrize("field", ["scheduled_job_succeeded", "no_unexplained_duplicate_or_missing_messages", "private_group_isolation"])
+def test_soak_duration_alone_does_not_establish_founder_readiness(tmp_path, monkeypatch, field):
+    journal, clock, record = active_journal(tmp_path, monkeypatch)
+    try:
+        clock[0] += 86400
+        fields = dict(soak_started_at=journal.state["active_at"], soak_completed_at=clock[0],
+                      scheduled_job_succeeded=True, no_unexplained_duplicate_or_missing_messages=True, private_group_isolation=True)
+        fields[field] = False
+        with pytest.raises(migration.MigrationError, match="acceptance_incomplete"):
+            record("founder_soak", **fields)
+        assert "founder_soak" not in journal.state["gates"]
+    finally:
+        journal.close()
+
+
+def test_founder_can_migrate_before_fresh_test_but_readiness_requires_real_24h_soak(tmp_path, monkeypatch):
+    journal, clock, record = active_journal(tmp_path, monkeypatch)
+    try:
+        with pytest.raises(migration.MigrationError, match="soak_unverified"):
+            journal.transition("tester_ready")
+        with pytest.raises(migration.MigrationError, match="requires_tester_ready"):
+            record("first_contact", **first_contact_fields(clock))
+        with pytest.raises(migration.MigrationError, match="24_hours"):
+            record("founder_soak", soak_started_at=clock[0] - 86400, soak_completed_at=clock[0],
+                   scheduled_job_succeeded=True, no_unexplained_duplicate_or_missing_messages=True, private_group_isolation=True)
+        clock[0] += 86399
+        with pytest.raises(migration.MigrationError, match="24_hours"):
+            record("founder_soak", soak_started_at=journal.state["active_at"], soak_completed_at=clock[0])
+        assert "founder_soak" not in journal.state["gates"] and "first_contact" not in journal.state["gates"]
+        finish_soak(journal, clock, record)
+        with pytest.raises(migration.MigrationError, match="fresh_first_contact_unverified"):
+            journal.transition("first_contact_verified")
+        record("first_contact", **first_contact_fields(clock))
+        journal.transition("first_contact_verified")
+        assert json.loads(journal.path.read_text())["stage"] == "first_contact_verified"
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("evidence_kind", "synthetic"), ("fresh_recipient", False), ("received_before_first_inbound", False),
+    ("verified_email", False), ("phone_consent", False), ("first_agent_reply_received", False),
+    ("provider_message_id_sha256", ""), ("signup_started_at", 0), ("first_received_at", 999999999),
+])
+def test_first_contact_requires_fresh_live_website_delivery_after_soak(tmp_path, monkeypatch, field, value):
+    journal, clock, record = active_journal(tmp_path, monkeypatch)
+    try:
+        finish_soak(journal, clock, record)
+        fields = first_contact_fields(clock)
+        fields[field] = value
+        with pytest.raises(migration.MigrationError):
+            record("first_contact", **fields)
+        assert "first_contact" not in json.loads(journal.path.read_text())["gates"]
+        with pytest.raises(migration.MigrationError, match="fresh_first_contact_unverified"):
+            journal.transition("first_contact_verified")
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("stage", ["tester_ready", "first_contact_verified"])
+def test_post_soak_stages_preserve_target_fenced_rollback(tmp_path, monkeypatch, stage):
+    journal, clock, record = active_journal(tmp_path, monkeypatch)
+    try:
+        finish_soak(journal, clock, record)
+        if stage == "first_contact_verified":
+            record("first_contact", **first_contact_fields(clock))
+            journal.transition(stage)
+        with pytest.raises(migration.MigrationError, match="requires_target_fence"):
+            migration.rollback_source(tmp_path, journal)
+        record("target_fenced")
+        clock[0] += 301
+        with pytest.raises(migration.MigrationError, match="evidence_stale"):
+            migration.rollback_source(tmp_path, journal)
+        record("target_fenced")
+        marker = tmp_path / "source-fenced"
+        marker.touch()
+        cron = tmp_path / "cron.backup"
+        cron.write_bytes(b"")
+        journal.state.update(source_marker=str(marker), source_crontab_backup=str(cron))
+        calls = []
+        monkeypatch.setattr(migration, "run", lambda argv, **kwargs: calls.append(argv))
+        migration.rollback_source(tmp_path, journal)
+        assert journal.state["stage"] == "rolled_back" and not marker.exists()
+        assert ["crontab", "-"] in calls
+    finally:
+        journal.close()
+
+
 @pytest.fixture
 def age_identity(tmp_path, monkeypatch):
     binary = Path(os.environ.get("SQUIRE_TEST_AGE_DIR", "/tmp/squire-age/arm64/age"))
