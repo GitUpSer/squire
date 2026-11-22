@@ -254,6 +254,20 @@ RUN case "$HINDSIGHT_VARIANT" in \
 # no longer includes the HTTP client. Match the founder's installed client.
 RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
         'hindsight-client==0.10.3'
+
+# Voice notes use the same local/base model as the founder, with no paid STT key.
+# Export the pinned upstream lock so adding its optional decoder cannot drift dependencies.
+RUN uv export --frozen --directory /opt/hermes --extra voice --no-dev --no-emit-project \
+        --no-hashes --format requirements-txt --output-file /tmp/stt-constraints.txt > /dev/null \
+ && uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
+        --constraint /tmp/stt-constraints.txt 'faster-whisper==1.2.1' \
+ && rm /tmp/stt-constraints.txt \
+ && /opt/hermes/.venv/bin/python -c 'from huggingface_hub import snapshot_download; snapshot_download("Systran/faster-whisper-base", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66", local_dir="/opt/squire/stt/base", allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"])' \
+ && rm -rf /opt/squire/stt/base/.cache \
+ && chmod -R a+rX,a-w /opt/squire/stt
+COPY stt/smoke.py /opt/squire/stt-build/smoke.py
+RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/stt-build/smoke.py
+
 COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
 COPY bin/squire-pg0-prestart.py /opt/squire/bin/squire-pg0-prestart.py
 RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py

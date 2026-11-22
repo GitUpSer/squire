@@ -1,5 +1,6 @@
 import hashlib
 import re
+import time
 from datetime import datetime
 
 JID = re.compile(r"^[0-9]+(?:-[0-9]+)?@(s\.whatsapp\.net|lid|g\.us)$")
@@ -34,7 +35,18 @@ def chat_type(chat):
     return "group" if chat.endswith("@g.us") else "dm" if chat.endswith(("@lid", "@s.whatsapp.net")) else "other"
 
 
-def change_event(store_id, change, message, activated_at, verified_live=False):
+def expiry_metadata(db, chat, message_id):
+    # A pre-patch mirror irretrievably lost expiry. Never infer ordinary from it.
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='squire_message_expiry'").fetchone():
+        return False, None
+    row = db.execute("SELECT known,expires_at FROM squire_message_expiry WHERE chat_jid=? AND msg_id=?",
+                     (chat, message_id)).fetchone()
+    if not row or row[0] != 1 or (row[1] is not None and (type(row[1]) is not int or not 0 < row[1] <= 253402300799)):
+        return False, None
+    return True, row[1]
+
+
+def change_event(store_id, change, message, activated_at, verified_live=False, *, expiry_known=False, expires_at=None):
     sequence = int(change["sequence"])
     chat = change["chat_jid"]
     message_id = change["msg_id"]
@@ -50,12 +62,14 @@ def change_event(store_id, change, message, activated_at, verified_live=False):
     if operation == "identity_move":
         base["new_chat_jid"] = change["new_chat_jid"]
         return base
-    if operation == "delete" or message is None:
+    if message is not None:
+        actual_chat = message.get("ChatJID", chat)
+        base.update(chat_jid=actual_chat, chat_type=chat_type(actual_chat))
+    if operation == "delete" or message is None or not expiry_known or (expires_at is not None and expires_at <= time.time()):
         base["kind"] = "delete"
         return base
-    actual_chat = message.get("ChatJID", chat)
-    base.update(chat_jid=actual_chat, chat_type=chat_type(actual_chat),
-                sender_jid=message.get("SenderJID", ""), from_me=bool(message.get("FromMe")),
+    base["expires_at"] = expires_at
+    base.update(sender_jid=message.get("SenderJID", ""), from_me=bool(message.get("FromMe")),
                 timestamp=epoch(message.get("Timestamp", timestamp)),
                 text=message.get("Text") or message.get("DisplayText") or "",
                 reply_to=message.get("quoted_msg_id"), mentions=[])

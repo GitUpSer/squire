@@ -647,3 +647,32 @@ gap: wacli dropped the provider expiry metadata. Expiry propagation and checks
 through capture, queued processing, media access and replies are being repaired.
 The media preflight remains unpassed. No source fence, account binding, live
 customer send or tester contact has occurred.
+
+The expiry-aware message service subsequently passed all 45 PostgreSQL tests,
+including revision-1 upgrade, expiry during send and uncertain-outcome
+preservation. Local browser acceptance passed signup, first outbound codes,
+private/group isolation and approved result sharing. The runtime checks now
+cover queued work, replies and both completed and interrupted media-cache files.
+The stricter contract requires explicit ordinary-message expiry nulls; deployment
+must hold capture while consumers and the patched producer are upgraded.
+
+A manual run of the deployed backup job on November 22 at 18:01 UTC produced
+fresh control, messaging, model-proxy and transport archives with no failures or
+expired-object deletions. All four passed cloud download, decryption and
+manifest checks; the transport's three SQLite stores passed integrity checks.
+The PostgreSQL archives were listed with matching server tools during creation;
+this new snapshot has not undergone a full database restore. The linked device
+remained connected with one sync process, no capture/store errors and outbound
+disabled afterward. This manual job does not establish scheduled execution.
+
+Actual rc13 images lacked faster-whisper and cached weights, so attachment-routing
+tests alone had not established voice transcription. An isolated, temporary
+installation on the standard canary verified the founder's local/base approach:
+faster-whisper 1.2.1, CPU int8, pinned model revision
+`ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66`. A 13-second public upstream speech
+fixture converted to Ogg/Opus transcribed in 3 seconds with network calls blocked
+and model hashes unchanged. Process peak was 618 MB; combined container peak
+was 2.96 GB under its 4 GB/2 CPU allocation with Hindsight healthy. Temporary
+files were removed and the production venv was unchanged. The reviewed image
+change bundles this dependency and read-only model; packaged-image verification
+and live founder voice acceptance remain outstanding.

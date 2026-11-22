@@ -555,7 +555,7 @@ def test_detached_writer_scan_uses_identity_tokens_not_inspection_text(tmp_path)
     process(99999002,['bash','/source/.hermes/scripts/wa-watchdog.sh'])
     process(99999003,['python','-c','print("bridge.js wa-watchdog.sh")'])
     process(99999004,['postgres','-D','/source/pg0/data'])
-    assert migration.detached_writer_pids(tmp_path)==[99999001,99999002]
+    assert set(migration.detached_writer_pids(tmp_path))=={99999001,99999002}
 
 
 def test_target_fence_invalidates_previously_healthy_activation_proofs(tmp_path,monkeypatch):

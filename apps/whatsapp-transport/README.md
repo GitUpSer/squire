@@ -3,7 +3,7 @@
 Private single-account broker pinned to wacli `v0.26.0` commit
 `535a8b969cc83c3aad57f66be77e8fd4a7fcaaa3`, plus
 `patches/0001-durable-message-origin.patch`. Production identifies itself as
-`0.26.0-squire.1`. Original release archive checksums and patch SHA-256 are
+`0.26.0-squire.2`. Original release archive checksums and patch SHA-256 are
 recorded in `wacli-release.json`. `scripts/install_wacli.py` installs the
 original verified binary for offline contract testing, not production.
 
@@ -13,6 +13,16 @@ can assert live provenance. History, unknown origins, and unavailable-message
 recovery carrying `SourceWebMsg` are conservatively quarantined. Timestamps
 alone never grant live origin. Older journal entries also cannot claim that
 a newer payload mutation was their original live content.
+
+The same transaction retains provider expiry in `squire_message_expiry`.
+Message events require `expires_at` (absolute Unix seconds); null means a
+provider-confirmed ordinary message. Live context expiration and history
+expiration metadata are retained before unwrapping loses them. Edits, replay,
+and LID/phone reconciliation preserve the earliest deadline. Unknown or
+malformed expiry and view-once content produce metadata-only deletion events.
+Media access checks the authoritative deadline before and after downloading.
+Outbound intents carry their absolute deadline through the CLI's existing
+IPC queue and pacing checks; an already dispatched uncertain send is never retried.
 
 ## Deploy and pair
 
@@ -125,21 +135,33 @@ is persisted in the transport ledger.
 
 Operator `POST /v1/operator/retention` accepts
 `{"days":7,"limit":100,"dry_run":true}`. Setting `dry_run:false` performs
-local payload purge; it never transmits a WhatsApp deletion. Only durably
-captured records are eligible. It stops sync and drains capture, writes
+local payload purge; it never transmits a WhatsApp deletion. Ordinary age-based
+cleanup requires prior durable capture. Expired and unknown-expiry payloads
+also qualify, including rows predating activation. It stops sync and drains capture, writes
 local tombstones through the verified pinned SQLite schema, commits those
 events to messaging, calls upstream `messages purge --confirm`, then commits
 the resulting deletions. Acknowledging the tombstones before purge prevents
 purge's journal cleanup from overtaking the committed checkpoint. A failed
 acknowledgement stops before purge. Repeating is safe.
 
-The supervised retention loop runs hourly after capture activation, in bounded
-batches of 100. `TRANSPORT_RETENTION_ENABLED=false` disables it during a
-rehearsal; interval and days are configurable. Failures are exposed in operator
-status and never bypass capture acknowledgements. Baseline history skipped at activation stays
-ineligible and needs migration-policy cleanup. The upstream build does not
-expose disappearing-message TTL metadata; shorter account-specific retention
-is a capability gate. Backups and minimal
+Regular retention runs hourly after capture activation. A read-only due check
+runs every five seconds; it does not interrupt sync when nothing is due.
+Expired payloads take priority over legacy quarantine, in batches of 100.
+`TRANSPORT_RETENTION_ENABLED=false` disables physical cleanup during a rehearsal;
+access still fails closed at expiry. Failures never bypass acknowledgements.
+Physical cleanup can lag during backlog or messaging outage; expired content
+cannot be delivered or retrieved while it waits.
+
+Pre-patch rows irretrievably lost expiry metadata. Opening the new writer adds
+sticky unknown metadata without changing the provider session, store ID, or
+journal checkpoint. Those rows immediately become inaccessible to capture/media;
+bounded local tombstone/ACK/purge cleanup then removes their payloads. A replay
+cannot relabel them ordinary. Source VPS history is outside this cleanup.
+Roll out consumers first with capture paused, then this producer, retaining the
+existing activation and checkpoint; never re-baseline the paired store.
+
+Expiry does not retroactively erase derived agent memory, runtime session
+transcripts, or existing encrypted backups. Backups and minimal
 receipt/dedup metadata need the deployment operator's 30-day lifecycle;
 payload purge does not erase backup archives. Monitor volume usage (wacli
 defaults to a 2 GB cap), capture errors, disconnected sessions and uncertain

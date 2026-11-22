@@ -185,6 +185,10 @@ async def test_activation_recovers_remote_commit_lost_ack(settings):
 
 
 async def test_capture_lost_ack_recovers_marker_without_replaying(settings):
+    settings.store_dir.mkdir()
+    with sqlite3.connect(settings.store_dir / "wacli.db") as db:
+        db.execute("CREATE TABLE squire_message_expiry(chat_jid,msg_id,known,expires_at)")
+        db.execute("INSERT INTO squire_message_expiry VALUES('123@s.whatsapp.net','msg',1,NULL)")
     change = dict(sequence=1, operation="upsert", chat_jid="123@s.whatsapp.net", msg_id="msg", message_time=100)
     class CLI:
         async def run(self, *args, **kwargs):
@@ -245,6 +249,7 @@ async def test_real_binary_journal_capture_receipts_and_safe_retention(settings)
     path = settings.store_dir / "wacli.db"
     chat, msg = "15555550123@s.whatsapp.net", "offline-message"
     with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO squire_message_expiry VALUES(?,?,1,NULL)", (chat,msg))
         db.execute("INSERT INTO chats(jid,kind,name,last_message_ts) VALUES (?,'dm','Fixture',?)", (chat, int(time.time())))
         db.execute("INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,text) VALUES (?,?,?,?,0,?)",
                    (chat, msg, chat, int(time.time()) - 9 * 86400, "offline captured payload"))
@@ -273,6 +278,7 @@ async def test_retention_pages_past_uncaptured_baseline(settings):
     ledger.put("capture_enabled", True)
     settings.store_dir.mkdir()
     with sqlite3.connect(settings.store_dir / "wacli.db") as db:
+        db.execute("CREATE TABLE squire_message_expiry(chat_jid,msg_id,known,expires_at)")
         db.execute("CREATE TABLE messages(chat_jid TEXT,msg_id TEXT,ts INTEGER,payload_purged_at INTEGER,deleted_at INTEGER,deletion_reason TEXT)")
         db.executemany("INSERT INTO messages(chat_jid,msg_id,ts,payload_purged_at) VALUES ('123@s.whatsapp.net',?,?,NULL)",
                        [(str(i), i) for i in range(1200)])

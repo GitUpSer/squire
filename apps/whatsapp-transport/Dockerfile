@@ -6,10 +6,14 @@ RUN git init . && git remote add origin https://github.com/openclaw/wacli.git \
     && test "$(git rev-parse HEAD)" = 535a8b969cc83c3aad57f66be77e8fd4a7fcaaa3
 COPY apps/whatsapp-transport/patches/0001-durable-message-origin.patch /tmp/origin.patch
 COPY apps/whatsapp-transport/patches/squire_origin_test.go internal/store/squire_origin_test.go
-RUN echo '7145d3a495ccda226b7d6e255b164357e905a2238e7651a40ec1773e06b55ccf  /tmp/origin.patch' | sha256sum -c - \
+COPY apps/whatsapp-transport/patches/squire_expiry_store_test.go internal/store/squire_expiry_store_test.go
+COPY apps/whatsapp-transport/patches/squire_expiry_app_test.go internal/app/squire_expiry_app_test.go
+COPY apps/whatsapp-transport/patches/squire_expiry_wa_test.go internal/wa/squire_expiry_wa_test.go
+COPY apps/whatsapp-transport/patches/squire_expiry_cli_test.go cmd/wacli/squire_expiry_cli_test.go
+RUN echo 'e51a043ca961f3cf872309dc520546194fa562d5663fe134de6059c4f3a22db2  /tmp/origin.patch' | sha256sum -c - \
     && git apply --check /tmp/origin.patch && git apply /tmp/origin.patch \
-    && go test -tags sqlite_fts5 ./internal/store -run 'TestSquireOrigin|TestArchiveIncomingConcurrentWriters' \
-    && CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -ldflags '-s -w -X main.version=0.26.0-squire.1' -o /usr/local/bin/wacli ./cmd/wacli
+    && go test -tags sqlite_fts5 ./internal/store ./internal/wa ./internal/app ./cmd/wacli -run 'TestSquire|TestArchiveIncomingConcurrentWriters|TestUnpacedRefusesExpiredCallerDeadlineWithFreeSlot' \
+    && CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -ldflags '-s -w -X main.version=0.26.0-squire.2' -o /usr/local/bin/wacli ./cmd/wacli
 
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080 TRANSPORT_DATA_DIR=/data PYTHONPATH=/opt/backup

@@ -50,6 +50,7 @@ class Send(BaseModel):
     text: str = Field(default="", max_length=32000)
     media: OutboundMedia | None = None
     reply_to: str | None = Field(default=None, max_length=200)
+    expires_at: int | None = Field(default=None, strict=True, ge=1, le=253402300799)
 
     @field_validator("recipient")
     @classmethod
@@ -80,7 +81,7 @@ class Broker:
             if request.generation != self.ledger.get("generation"):
                 raise Conflict("stale_generation")
             fingerprint = hmac.new(self.settings.broker_token.encode(),
-                json.dumps(request.model_dump(), sort_keys=True).encode(), hashlib.sha256).hexdigest()
+                json.dumps(request.model_dump(exclude={"expires_at"} if request.expires_at is None else set()), sort_keys=True).encode(), hashlib.sha256).hexdigest()
             with self.ledger.connection() as db:
                 row = db.execute("SELECT * FROM sends WHERE operation_id=?", (request.operation_id,)).fetchone()
             if row:
@@ -88,6 +89,8 @@ class Broker:
                     raise Conflict("operation_payload_changed")
                 if row["state"] != "definitely_unsent":
                     return self.result(request.operation_id, dict(row))
+            if request.expires_at is not None and request.expires_at <= time.time():
+                return dict(operation_id=request.operation_id, status="definitely_unsent", error_code="message_expired", retryable=False)
             refusal = None
             if not self.ledger.get("outbound_enabled", False):
                 refusal = "outbound_paused"
@@ -118,6 +121,10 @@ class Broker:
                         args = ["send", "text", "--to", request.recipient, "--message", request.text, "--no-preview"]
                     if request.reply_to:
                         args.extend(["--reply-to", request.reply_to])
+                    if request.expires_at is not None:
+                        if request.expires_at <= time.time():
+                            raise CLIError("message_expired", definitely_unsent=True)
+                        args.extend(["--squire-expires-at", str(request.expires_at)])
                     dispatched = True
                     data = await self.cli.run(*args)
                 if not isinstance(data, dict) or not data.get("sent") or not data.get("id"):

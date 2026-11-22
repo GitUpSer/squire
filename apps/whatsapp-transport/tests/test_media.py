@@ -22,6 +22,8 @@ def settings(tmp_path):
         require_mount=False, sync_enabled=False)
     value.store_dir.mkdir()
     with sqlite3.connect(value.store_dir / "wacli.db") as db:
+        db.execute("CREATE TABLE squire_message_expiry(chat_jid,msg_id,known,expires_at)")
+        db.execute("INSERT INTO squire_message_expiry VALUES('123@s.whatsapp.net','known',1,NULL)")
         db.execute("CREATE TABLE messages(chat_jid,msg_id,media_type,mime_type,filename,file_length,revoked,deleted_for_me,deleted_at,payload_purged_at)")
         db.execute("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)", ("123@s.whatsapp.net", "known", "audio", "audio/ogg; codecs=opus", "../../voice\r\n.ogg", 5, 0, 0, 0, 0))
     return value
@@ -76,10 +78,10 @@ async def test_media_rejects_oversize_and_deleted_before_download(settings):
 def test_descriptor_has_no_provider_secret():
     change = {"sequence": 1, "chat_jid": "123@s.whatsapp.net", "msg_id": "known", "operation": "upsert", "message_time": 100}
     message = {"MediaType": "audio", "MimeType": "audio/ogg", "Filename": "voice.ogg", "MediaKey": "secret", "DirectPath": "/secret"}
-    event = change_event("store", change, message, 0, True)
+    event = change_event("store", change, message, 0, True, expiry_known=True)
     assert event["media"] == {"type": "audio", "mime_type": "audio/ogg", "filename": "voice.ogg"}
     assert "secret" not in str(event)
-    assert "media" not in change_event("store", change, message | {"Revoked": True}, 0, True)
+    assert "media" not in change_event("store", change, message | {"Revoked": True}, 0, True, expiry_known=True)
 
 
 async def test_outgoing_media_private_temp_idempotency_and_uncertain(settings):

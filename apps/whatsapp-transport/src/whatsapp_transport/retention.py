@@ -26,6 +26,9 @@ class Retention:
             eligible, scanned, skipped = [], 0, 0
             finished = False
             with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+                # Expiry and legacy quarantine bypass the age cursor. New tombstones
+                # are acknowledged even when the payload predates activation.
+                eligible = self.expired(db, limit)
                 # Advance over ineligible legacy history; an oldest-page LIMIT must
                 # never starve captured records behind the activation baseline.
                 while scanned < 1000 and len(eligible) < limit:
@@ -39,6 +42,8 @@ class Retention:
                     for chat, msg, timestamp, rowid in rows:
                         cursor = [timestamp, rowid]
                         scanned += 1
+                        if (chat, msg) in eligible:
+                            continue
                         if self.ledger.was_captured(digest(chat), digest(msg)):
                             eligible.append((chat, msg))
                         else:
@@ -64,13 +69,27 @@ class Retention:
             self.ledger.put("retention_scan_cursor", [-9223372036854775808, 0] if finished else cursor)
             return {"eligible": len(eligible), "skipped_uncaptured": skipped, "scanned": scanned, "purged": purged}
 
+    @staticmethod
+    def expired(db, limit):
+        return db.execute("""SELECT e.chat_jid,e.msg_id FROM squire_message_expiry e
+            JOIN messages m ON m.chat_jid=e.chat_jid AND m.msg_id=e.msg_id
+            WHERE (e.known=0 OR e.expires_at<=?) AND m.payload_purged_at IS NULL
+            ORDER BY e.known DESC,e.expires_at LIMIT ?""", (int(time.time()), limit)).fetchall()
+
     async def follow(self):
+        next_regular = time.monotonic() + self.settings.retention_interval_seconds
         while True:
-            await asyncio.sleep(self.settings.retention_interval_seconds)
+            await asyncio.sleep(min(5, self.settings.retention_interval_seconds))
             if not self.settings.retention_enabled or not self.ledger.get("capture_enabled", False):
                 continue
             try:
+                if time.monotonic() < next_regular:
+                    path = self.settings.store_dir / "wacli.db"
+                    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+                        if not self.expired(db, 1):
+                            continue
                 result = await self.run(days=self.settings.retention_days, limit=100, dry_run=False)
+                next_regular = time.monotonic() + self.settings.retention_interval_seconds
                 self.ledger.put("retention_status", {"at": time.time(), **result})
             except Exception:
                 # Never advance a cursor or force a purge after any capture/CLI failure.

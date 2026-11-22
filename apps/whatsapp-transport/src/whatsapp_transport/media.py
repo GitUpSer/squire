@@ -4,12 +4,13 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .normalize import JID
+from .normalize import JID, expiry_metadata
 
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 TYPES = {"image", "audio", "video", "document"}
@@ -49,6 +50,9 @@ class Media:
         if not path.is_file():
             raise HTTPException(404, "media_not_found")
         with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            known, expires_at = expiry_metadata(db, request.chat_jid, request.provider_message_id)
+            if not known or (expires_at is not None and expires_at <= time.time()):
+                raise HTTPException(404, "media_not_found")
             row = db.execute("""SELECT media_type,mime_type,filename,file_length
                 FROM messages WHERE chat_jid=? AND msg_id=? AND COALESCE(revoked,0)=0
                 AND COALESCE(deleted_for_me,0)=0 AND COALESCE(deleted_at,0)=0
@@ -60,7 +64,7 @@ class Media:
             raise HTTPException(415, "unsupported_media")
         if not isinstance(size, int) or not 0 < size <= MAX_MEDIA_BYTES:
             raise HTTPException(413, "media_size_unavailable_or_exceeded")
-        return {"type": kind, "mime_type": safe_mime(mime, kind), "filename": safe_filename(filename), "size": size}
+        return {"expires_at": expires_at, "type": kind, "mime_type": safe_mime(mime, kind), "filename": safe_filename(filename), "size": size}
 
     async def fetch(self, request):
         async with self.lock:

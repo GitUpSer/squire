@@ -7,7 +7,7 @@ import time
 import httpx
 
 from .cli import CLIError
-from .normalize import change_event, chat_type
+from .normalize import change_event, chat_type, expiry_metadata
 
 
 def digest(value):
@@ -111,8 +111,14 @@ class Capture:
                                 (change["chat_jid"], change["msg_id"])).fetchone()
                         if exists:
                             raise
+                known, expires_at = False, None
+                if message is not None:
+                    path = self.settings.store_dir / "wacli.db"
+                    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+                        known, expires_at = expiry_metadata(db, message.get("ChatJID", change["chat_jid"]), change["msg_id"])
                 events.append(change_event(store_id, change, message, self.ledger.get("activated_at", time.time()),
-                                           verified_live=self.verified_live(change["sequence"])))
+                                           verified_live=self.verified_live(change["sequence"]),
+                                           expiry_known=known, expires_at=expires_at))
                 records.append((digest(change["chat_jid"]), digest(change["msg_id"]), time.time()))
             if events or page["next_checkpoint"] != before:
                 self.ledger.put("capture_pending", {"checkpoint": page["next_checkpoint"], "records": records})

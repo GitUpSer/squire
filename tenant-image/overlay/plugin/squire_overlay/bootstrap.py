@@ -41,6 +41,9 @@ def prepare():
     cfg.setdefault("plugins",{})["enabled"]=["squire-overlay"]
     cfg["plugins"]["disabled"]=[]
     cfg.setdefault("logging",{})["level"]="WARNING"
+    # A pinned local base snapshot keeps voice input keyless and offline.
+    cfg.setdefault("stt",{}).update({"enabled":True,"provider":"local"})
+    cfg["stt"].setdefault("local",{}).update({"model":"/opt/squire/stt/base","device":"cpu","compute_type":"int8"})
     from .onboarding import prepare as prepare_onboarding
     prepare_onboarding(home,atomic)
     # Pilot onboarding is supplied by the supported plugin hook. Remove the
