@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -155,7 +155,8 @@ class ImportBinding(StrictModel):
     recipient: str = Field(min_length=3, max_length=150)
     aliases: list[str] = Field(default_factory=list, max_length=10)
     kind: Literal["dm", "group"] = "dm"
-    activated_at: float
+    activated_at: float = Field(ge=0, allow_inf_nan=False)
+    handled_provider_message_ids: list[Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:-]+$")]] = Field(default_factory=list, max_length=1000)
     owner_recipient: str | None = Field(default=None, max_length=150)
     group_limit: int = Field(default=1, ge=1, le=100)
 

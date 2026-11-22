@@ -369,6 +369,9 @@ def set_tenant_state(db: Session, tenant_id: str, state: str, expires_at: float 
 
 
 def import_binding(db: Session, req: ImportBinding) -> dict:
+    if db.bind.dialect.name == "postgresql":
+        # Share capture's lock so a pre-binding observation cannot race import.
+        db.execute(sql_text("SELECT pg_advisory_xact_lock(784231903)"))
     tenant = db.get(TenantState, req.tenant_id)
     if tenant is None:
         tenant = TenantState(tenant_id=req.tenant_id, account_id=req.account_id, state="imported_active", group_limit=req.group_limit)
@@ -378,6 +381,9 @@ def import_binding(db: Session, req: ImportBinding) -> dict:
         raise HTTPException(409, "account mismatch")
     tenant = lock_tenant(db, req.tenant_id)
     binding = new_binding(db, tenant, req.recipient, req.kind, req.activated_at)
+    if (binding.kind != req.kind or binding.provider_account_id != settings().provider_account_id
+        or binding.activated_at != req.activated_at):
+        raise HTTPException(409, "import binding scope or replay boundary changed")
     for alias in req.aliases:
         alias_to(db, alias, binding, "operator-migration:" + req.operation_id)
     if req.kind == "group":
@@ -388,6 +394,28 @@ def import_binding(db: Session, req: ImportBinding) -> dict:
             raise HTTPException(403, "group owner must be bound founder")
         binding.owner_identity_hash = address_hash(req.owner_recipient)
         db.add(binding)
+    # Payload-free source receipts use the same durable identity as transport
+    # replay. They may only be installed before any different work exists.
+    from .ingest import _event_key
+    marker = "migration_handled:" + digest("migration-import", req.operation_id)
+    for message_id in sorted(set(req.handled_provider_message_ids)):
+        event = Event(event_id="migration", sequence=0, provider_message_id=message_id,
+            chat_jid=req.recipient, chat_type=req.kind, timestamp=req.activated_at, expires_at=None)
+        key = _event_key(event, binding)
+        unbound_keys = [_event_key(event.model_copy(update={"chat_jid":address}), None)
+                        for address in {req.recipient, *req.aliases}]
+        if db.exec(select(InboxEvent.id).where(InboxEvent.logical_key.in_(unbound_keys))).first():
+            raise HTTPException(409, "source receipt conflicts with pre-binding observation; reconciliation required")
+        existing = db.exec(select(InboxEvent).where(InboxEvent.logical_key == key)).first()
+        if existing:
+            if (existing.state != "done" or existing.error_code != marker or existing.payload_enc is not None
+                or existing.binding_id != binding.id or existing.tenant_id != tenant.tenant_id):
+                raise HTTPException(409, "source receipt conflicts with existing event; reconciliation required")
+            continue
+        db.add(InboxEvent(id=identifier(), logical_key=key, provider_account_id=settings().provider_account_id,
+            provider_message_id=message_id, binding_id=binding.id, tenant_id=tenant.tenant_id,
+            kind="message", state="done", payload_enc=None, error_code=marker,
+            created_at=now(), completed_at=now()))
     return {"tenant_id": tenant.tenant_id, "conversation_id": binding.id}
 
 

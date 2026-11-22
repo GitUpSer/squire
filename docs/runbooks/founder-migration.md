@@ -344,15 +344,22 @@ source live and prevent final cutover.
 Prepare a fresh cold service/volume with `sleep infinity` and no owner
 credentials; an initialized canary volume cannot change runtime identity.
 Complete email-only account verification using an email-bound invitation.
-Hold transport in pairing mode before the source fence and both founder
-imports. Existing capture checkpoints remain intact. Create the DM binding
-immediately after fencing, then adopt the cold service through the founder
-operator API. Resume capture from its existing checkpoint without calling
-activation again. Bound messages wait for an unready runtime; unbound or
+While transport is pairing-held, disable capture without changing its
+identity, generation or checkpoints. Start sync with capture still disabled
+before fencing the source: messages can reach the local journal while
+ingestion, receipts, retention and outbound remain held. Create the DM binding
+after fencing and reconciling the source, then adopt the cold service through
+the founder operator API. Import verified source-handled provider IDs as
+payload-free completion records, including IDs not yet collected by transport.
+Conflicting existing observations require explicit reconciliation. Resume
+capture from its existing checkpoint without calling activation again.
+Bound messages wait for an unready runtime; unbound or
 paused-tenant messages are ignored by ingestion, so those states cannot serve
 as a migration queue. DM re-import does not update its original replay cutoff.
 Record a whole-second replay floor and reconcile the source-stop overlap:
 provider timestamps have second precision, while journal times are fractional.
+Reconcile pending source requests preceding that floor as well; a stable local
+journal alone does not prove that WhatsApp backlog collection is complete.
 
 After all preflight gates, `fence --execute` records an in-progress journal, preserves
 the exact crontab, replaces it with an inactive marker, and installs persistent
