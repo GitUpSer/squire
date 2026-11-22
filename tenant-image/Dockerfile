@@ -268,10 +268,6 @@ RUN uv export --frozen --directory /opt/hermes --extra voice --no-dev --no-emit-
 COPY stt/smoke.py /opt/squire/stt-build/smoke.py
 RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/stt-build/smoke.py
 
-COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
-COPY bin/squire-pg0-prestart.py /opt/squire/bin/squire-pg0-prestart.py
-RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py
-
 # ---------------------------------------------------------------------------
 # 2b. restic (nightly volume backups)
 # ---------------------------------------------------------------------------
@@ -351,6 +347,20 @@ RUN /usr/local/bin/restic version
 RUN apt-get -o Acquire::Retries=3 update \
  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends patch \
  && rm -rf /var/lib/apt/lists/*
+
+# Founder 0.5.2 predates CODEX_HOME support; read the existing access-only tmpfs
+# export, leaving the owner's separate Codex CLI refresh credentials untouched.
+COPY hindsight/001-founder-codex-home.patch hindsight/codex_auth_smoke.py /opt/squire/hindsight-build/
+COPY patches/apply-patches.sh /opt/squire/hindsight-build/apply-patches.sh
+RUN if [ "$HINDSIGHT_VARIANT" = founder ]; then \
+      memory_site=$(/opt/squire/hindsight-venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))'); \
+      bash /opt/squire/hindsight-build/apply-patches.sh "$memory_site"; \
+    fi \
+ && runuser -u hermes -- /opt/squire/hindsight-venv/bin/python /opt/squire/hindsight-build/codex_auth_smoke.py
+
+COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
+COPY bin/squire-pg0-prestart.py /opt/squire/bin/squire-pg0-prestart.py
+RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py
 
 COPY patches/ /opt/squire/patches/
 RUN chmod 0755 /opt/squire/patches/*.sh \

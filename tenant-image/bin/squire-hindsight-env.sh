@@ -167,12 +167,23 @@ if not candidates:
     print("none"); sys.exit(0)
 
 best = max(candidates, key=lambda t: jwt_exp(t.get("access_token", "")))
+account_id = best.get("account_id") or ""
+if not account_id:
+    # Hermes pool tokens can omit this field; use the SAME selected token's claim.
+    try:
+        payload = best["access_token"].split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        candidate = claims["https://api.openai.com/auth"]["chatgpt_account_id"]
+        if isinstance(candidate, str):
+            account_id = candidate
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
 derived = {
     "auth_mode": "chatgpt",  # required verbatim by hindsight's CodexAuthManager
     "tokens": {
         # NO refresh_token, ever — hermes is the sole refresher (see header).
         "access_token": best["access_token"],
-        "account_id": best.get("account_id") or "",
+        "account_id": account_id,
     },
 }
 blob = json.dumps(derived, indent=2).encode()

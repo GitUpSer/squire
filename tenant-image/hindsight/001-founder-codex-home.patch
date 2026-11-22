@@ -1,0 +1,24 @@
+--- a/hindsight_api/engine/providers/codex_llm.py
++++ b/hindsight_api/engine/providers/codex_llm.py
+@@ -84,7 +84,8 @@
+             FileNotFoundError: If auth file doesn't exist.
+             ValueError: If auth file is invalid.
+         """
+-        auth_file = Path.home() / ".codex" / "auth.json"
++        auth_file = (Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME")
++                     else Path.home() / ".codex") / "auth.json"
+ 
+         if not auth_file.exists():
+             raise FileNotFoundError(
+--- a/hindsight_api/engine/llm_wrapper.py
++++ b/hindsight_api/engine/llm_wrapper.py
+@@ -679,7 +679,8 @@
+             FileNotFoundError: If auth file doesn't exist.
+             ValueError: If auth file is invalid.
+         """
+-        auth_file = Path.home() / ".codex" / "auth.json"
++        auth_file = (Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME")
++                     else Path.home() / ".codex") / "auth.json"
+ 
+         if not auth_file.exists():
+             raise FileNotFoundError(

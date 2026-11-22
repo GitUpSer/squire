@@ -10,6 +10,8 @@
 !browser/smoke.py
 !hindsight/
 !hindsight/smoke.py
+!hindsight/codex_auth_smoke.py
+!hindsight/001-founder-codex-home.patch
 !stt/
 !stt/smoke.py
 !bin/
