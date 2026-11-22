@@ -74,7 +74,11 @@ def translated_job(job,spec,runtime,selected):
         result=copy.deepcopy(job)
         contexts=result.get("context_from") or []
         if isinstance(contexts,str):contexts=[contexts]
-        require(set(contexts)<=selected,"cross_scope_cron_context")
+        # Hermes resolves this reserved sentinel to the current job, including
+        # whitespace/case variants. Validate its scope without changing the
+        # stored value or allowing another runtime's explicit job IDs.
+        scoped_contexts=[job["id"] if isinstance(value,str) and value.strip().lower()=="self" else value for value in contexts]
+        require(all(isinstance(value,str) and value in selected for value in scoped_contexts),"cross_scope_cron_context")
         # Paths are explicit reviewed replacements, never string-substituted inside shell commands.
         for field in ("script","monitor_script","workdir"):
             if result.get(field):

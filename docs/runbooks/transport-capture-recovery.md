@@ -44,3 +44,56 @@ transport, reconciling the remote ingest checkpoint against the restored local
 journal, and keeping uncertain sends quarantined. An offline restore rehearsal
 does not authorize that promotion. Preserve the original encrypted snapshot;
 never run the offline session copy concurrently with the production connection.
+
+## Selected group pilot
+
+The operator's private selection record holds the user's chosen group, its
+unique provider identity, and a current membership snapshot. For this pilot
+test, the founder is a current administrator and member; the
+linked agent is also a member. This selection records consent, but does not
+create a messaging binding or authorize sending before the release gates pass.
+Refresh membership at claim and delivery time; do not treat the saved snapshot
+as a permanent administrator grant.
+
+1. Finish the founder's verified DM binding and active sponsor entitlement.
+   Keep outbound disabled while preparing the group. Fence the old sender for
+   this conversation before the first live group interaction, or complete the
+   single-writer cutover; otherwise the original gateway may also answer.
+2. Once ready to use it, create a short-lived claim with authenticated
+   control API `POST /v1/groups/claims`, or the service-authenticated messaging
+   `POST /v1/control/groups/claims` with the sponsor tenant and a stable operation
+   ID.
+   Keep the returned nonce private. Claims expire after ten minutes by default,
+   so do not generate one during a lengthy image build.
+3. The founder posts the returned `!squire claim <nonce>` in the selected group.
+   This is the existing in-band identity/administrator proof, not a new consent
+   question. Because the founder is already an administrator, no separate
+   `!squire approve` message is needed. Require the real captured event to
+   originate in the privately selected group; do not manufacture an ingest
+   event or manually insert an activated claim into the database.
+4. Messaging verifies current owner membership and administrator identity,
+   creates an addressed-mode group binding, and emits the durable
+   `activate_group` control command. Control provisions a distinct sponsored
+   group runtime with its own service, volume, conversation, scoped tokens and
+   backup bucket. Use a fresh group home and standard group image, with private
+   tools disabled. Do not copy the founder's DM memory, browser sessions,
+   credentials, Hindsight bank, or private cron jobs. Importing historical group
+   messages is a separate explicit scope decision, unnecessary for this test.
+5. Require the new runtime's matching-generation readiness/model heartbeat,
+   messaging registration, sponsor model authorization and recipient binding
+   before enabling the coordinated sender. Confirm there is no unrelated
+   queued outbound work eligible to drain when the global switch is enabled.
+6. In the selected group, the founder sends one bounded prompt such as
+   `!squire Reply with exactly SQUIRE_GROUP_OK and do not use tools.` Require
+   one live captured event, one scoped runtime turn, one accepted outbound
+   operation and one visible reply in that same group. Report IDs only in the
+   private proof artifact; shared status should contain counts and outcomes.
+   Retrying the identical event must not produce a second reply. An ordinary
+   message without the prefix/reply context must not start another turn in
+   addressed mode. Native WhatsApp mention routing remains unsupported by the
+   pinned CLI; use `!squire` or a reply to the agent.
+
+No group was joined, created, modified, claimed, provisioned or messaged by the
+read-only selection step. The existing user selection is sufficient consent;
+the remaining claim command is a required protocol step in the implemented
+approval path.

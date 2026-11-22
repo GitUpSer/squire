@@ -60,6 +60,46 @@ def test_postgres_credentials_are_source_local_env_only_and_identity_checked(tmp
         migration.pg_environment(dict(config, database="wrong-instance"), tmp_path)
 
 
+def preflight_fields(gate):
+    values = dict(source_crontab_sha256=hashlib.sha256(b"").hexdigest())
+    if gate == "identity_map": values.update(target_writer_scope_sha256="c"*64, provider_generation=2)
+    if gate == "group_isolation": values.update(selected_group_sha256="d"*64, private_state_excluded=True, scoped_runtime_verified=True)
+    if gate == "media_parity": values.update(evidence_kind="offline_media_fixture", attachment_roundtrip_verified=True, voice_roundtrip_verified=True, ephemeral_ttl_enforced=True, no_live_account_send=True)
+    if gate == "rollback_rehearsal": values.update(evidence_kind="isolated_rollback_rehearsal", target_fence_before_source_restart=True, restore_verified=True, source_production_unchanged=True)
+    return values
+
+
+def writer_fields(clock):
+    return dict(checked_at=clock[0], target_writer_scope_sha256="c"*64, provider_generation=2,
+                single_transport_owner=True, outbound_enabled=True, dm_roundtrip_verified=True)
+
+
+def target_fence_fields(clock):
+    return dict(checked_at=clock[0], target_writer_scope_sha256="c"*64, provider_generation=2,
+                evidence_kind="live_target_fence", transport_outbound_disabled=True, messaging_outbound_disabled=True,
+                bindings_revoked=True, runtime_writers_stopped=True, scheduled_grants_revoked=True)
+
+
+def group_fields(tmp_path, journal, clock):
+    proof = tmp_path / "fence-proof.json"
+    proof.write_text(json.dumps(dict(format="squire-source-fence-v1", verified=True,
+        migration_id=journal.state["migration_id"], target_image_digest=journal.state["target_image_digest"],
+        source_fenced_at=journal.state["source_fenced_at"], checked_at=clock[0], units_stopped=list(migration.FENCE_UNITS),
+        persistent_conditions_verified=True, crontab_fenced=True, detached_writer_count=0)))
+    reference = dict(path=str(proof), sha256=migration.checksum(proof))
+    return dict(evidence_kind="live_selected_group", group_sha256="d"*64, runtime_scope_sha256="e"*64,
+                provider_event_sha256="f"*64, provider_reply_sha256="a"*64, started_at=clock[0], completed_at=clock[0],
+                founder_admin_verified=True, agent_member_verified=True, isolated_runtime_verified=True,
+                duplicate_replay_suppressed=True, accepted_send_count=1, visible_reply_count=1,
+                source_fence_before=reference, source_fence_after=reference)
+
+
+def runtime_fields(clock):
+    return dict(group_sha256="d"*64, runtime_scope_sha256="e"*64, checked_at=clock[0], claim_activated=True,
+                founder_admin_verified=True, agent_member_verified=True, isolated_runtime_verified=True,
+                model_ready=True, matching_generation_heartbeat=True, outbound_disabled=True)
+
+
 def test_journal_gates_fencing_and_target_safe_rollback(tmp_path):
     journal = migration.Journal.create(tmp_path / "journal.json", "migration-test", "sha256:" + "1" * 64)
     with pytest.raises(migration.MigrationError, match="gates_incomplete"):
@@ -67,7 +107,7 @@ def test_journal_gates_fencing_and_target_safe_rollback(tmp_path):
     for gate in migration.GATES:
         proof = tmp_path / (gate + ".json")
         proof.write_text(json.dumps(dict(gate=gate, migration_id="migration-test", target_image_digest="sha256:" + "1" * 64,
-                                        passed=True, source_crontab_sha256=hashlib.sha256(b"").hexdigest())))
+                                        passed=True, **preflight_fields(gate))))
         journal.record_gate(gate, proof)
     journal.transition("fencing")
     journal.transition("source_fenced")
@@ -86,11 +126,12 @@ def test_gate_evidence_must_match_image_and_migration(tmp_path):
     journal.close()
 
 
-def active_journal(tmp_path, monkeypatch):
+def active_journal(tmp_path, monkeypatch, activate=True):
     clock = [100000.0]
     monkeypatch.setattr(migration.time, "time", lambda: clock[0])
     journal = migration.Journal.create(tmp_path / "journal.json", "customer-test", "sha256:" + "2" * 64)
     def record(gate, **fields):
+        if gate == "target_fenced" and not fields: fields = target_fence_fields(clock)
         proof = tmp_path / (gate + ".json")
         proof.write_text(json.dumps(dict(gate=gate, migration_id="customer-test", target_image_digest="sha256:" + "2" * 64,
                                         passed=True, **fields)))
@@ -98,14 +139,17 @@ def active_journal(tmp_path, monkeypatch):
     # Fresh recipient evidence is deliberately absent during founder migration.
     assert "first_contact" not in migration.GATES
     for gate in migration.GATES:
-        record(gate, source_crontab_sha256=hashlib.sha256(b"").hexdigest())
+        record(gate, **preflight_fields(gate))
     journal.transition("fencing")
     journal.transition("source_fenced")
     journal.transition("final_snapshot")
     record("final_restore")
     journal.transition("target_imported")
-    record("new_writer_healthy")
-    journal.transition("active")
+    if activate:
+        record("group_runtime_ready", **runtime_fields(clock))
+        record("group_roundtrip", **group_fields(tmp_path, journal, clock))
+        record("new_writer_healthy", **writer_fields(clock))
+        journal.transition("active")
     return journal, clock, record
 
 
@@ -196,8 +240,9 @@ def test_post_soak_stages_preserve_target_fenced_rollback(tmp_path, monkeypatch,
         with pytest.raises(migration.MigrationError, match="evidence_stale"):
             migration.rollback_source(tmp_path, journal)
         record("target_fenced")
-        marker = tmp_path / "source-fenced"
-        marker.touch()
+        marker = tmp_path / ".local/state/squire-migration/source-fenced"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"migration_id":journal.state["migration_id"]}))
         cron = tmp_path / "cron.backup"
         cron.write_bytes(b"")
         journal.state.update(source_marker=str(marker), source_crontab_backup=str(cron))
@@ -380,3 +425,159 @@ def test_offline_sqlite_refuses_output_with_busy_checkpoint(tmp_path):
                     writer.execute("PRAGMA busy_timeout=1")
                     writer.execute("UPDATE payload SET value='after'")
             reader.rollback()
+
+
+def test_one_fence_order_requires_live_group_only_after_import(tmp_path, monkeypatch):
+    journal, clock, record = active_journal(tmp_path, monkeypatch, activate=False)
+    try:
+        assert 'group_roundtrip' not in migration.GATES
+        assert journal.state['stage'] == 'target_imported'
+        with pytest.raises(migration.MigrationError, match='live_acceptance'):
+            record('new_writer_healthy', **writer_fields(clock))
+        record('group_runtime_ready', **runtime_fields(clock))
+        record('group_roundtrip', **group_fields(tmp_path, journal, clock))
+        record('new_writer_healthy', **writer_fields(clock))
+        clock[0] += 301
+        with pytest.raises(migration.MigrationError, match='live_acceptance_stale'):
+            journal.transition('active')
+    finally: journal.close()
+
+
+@pytest.mark.parametrize('field,value', [('group_sha256','0'*64),('runtime_scope_sha256','0'*64),
+    ('accepted_send_count',2),('visible_reply_count',0),('duplicate_replay_suppressed',False),
+    ('evidence_kind','synthetic'),('started_at',0),('completed_at',999999999)])
+def test_group_roundtrip_rejects_wrong_scope_or_incomplete_live_proof(tmp_path, monkeypatch, field, value):
+    journal, clock, record = active_journal(tmp_path, monkeypatch, activate=False)
+    try:
+        record('group_runtime_ready', **runtime_fields(clock))
+        fields = group_fields(tmp_path,journal,clock); fields[field]=value
+        with pytest.raises(migration.MigrationError): record('group_roundtrip',**fields)
+        assert 'group_roundtrip' not in journal.state['gates']
+    finally: journal.close()
+
+
+def test_group_gate_requires_fresh_verified_source_artifact_and_invalidates_old_runtime(tmp_path, monkeypatch):
+    journal, clock, record = active_journal(tmp_path, monkeypatch, activate=False)
+    try:
+        record('group_runtime_ready', **runtime_fields(clock))
+        fields=group_fields(tmp_path,journal,clock)
+        clock[0]+=301
+        with pytest.raises(migration.MigrationError,match='source_fence_proof_stale'): record('group_roundtrip',**fields)
+        fields=group_fields(tmp_path,journal,clock)
+        record('group_roundtrip',**fields)
+        record('group_runtime_ready',**runtime_fields(clock))
+        assert 'group_roundtrip' not in journal.state['gates']
+        fields['source_fence_before']['sha256']='0'*64
+        with pytest.raises(migration.MigrationError,match='missing_or_changed'):record('group_roundtrip',**fields)
+    finally:journal.close()
+
+
+def test_live_gate_cannot_be_recorded_before_source_fence(tmp_path):
+    journal=migration.Journal.create(tmp_path/'journal.json','test','sha256:'+'1'*64)
+    proof=tmp_path/'proof.json'
+    proof.write_text(json.dumps(dict(gate='group_roundtrip',migration_id='test',target_image_digest='sha256:'+'1'*64,passed=True)))
+    try:
+        with pytest.raises(migration.MigrationError,match='requires_target_imported'):journal.record_gate('group_roundtrip',proof)
+    finally:journal.close()
+
+
+def test_old_target_fence_report_cannot_be_refreshed_by_rerecording(tmp_path,monkeypatch):
+    journal,clock,record=active_journal(tmp_path,monkeypatch)
+    try:
+        fields=target_fence_fields(clock)
+        record('target_fenced',**fields)
+        clock[0]+=301
+        with pytest.raises(migration.MigrationError,match='evidence_stale'):record('target_fenced',**fields)
+        with pytest.raises(migration.MigrationError,match='evidence_stale'):journal.transition('rolled_back')
+    finally:journal.close()
+
+
+def prepare_fence_files(home,journal):
+    marker=home/'.local/state/squire-migration/source-fenced';marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'migration_id':journal.state['migration_id']}))
+    journal.state['source_marker']=str(marker)
+    for unit in migration.FENCE_UNITS:
+        path=home/'.config/systemd/user'/(unit+'.d')/'90-squire-migration-fence.conf'
+        path.parent.mkdir(parents=True);path.write_text(f'[Unit]\nConditionPathExists=!{marker}\n')
+    return marker
+
+
+def test_source_probe_checks_real_fence_files_and_only_runs_read_commands(tmp_path,monkeypatch):
+    journal,clock,record=active_journal(tmp_path,monkeypatch,activate=False)
+    try:
+        marker=prepare_fence_files(tmp_path,journal)
+        calls=[]
+        monkeypatch.setattr(migration,'detached_writer_pids',lambda:[])
+        monkeypatch.setattr(migration,'run',lambda argv,**kw: calls.append(argv) or migration.FENCED_CRONTAB)
+        monkeypatch.setattr(migration,'service_inventory',lambda:{unit:{'ActiveState':'inactive'} for unit in migration.FENCE_UNITS})
+        result=migration.source_fence_report(tmp_path,journal,tmp_path/'fence-proof-generated.json')
+        assert result['verified'] and calls==[['crontab','-l']]
+        path=tmp_path/'.config/systemd/user'/(migration.FENCE_UNITS[0]+'.d')/'90-squire-migration-fence.conf'
+        path.write_text('[Unit]\n')
+        with pytest.raises(migration.MigrationError,match='condition_changed'):migration.source_fence_report(tmp_path,journal,tmp_path/'failed.json')
+        assert marker.exists() and not (tmp_path/'failed.json').exists()
+    finally:journal.close()
+
+
+def test_rollback_checks_crontab_before_removing_any_fence(tmp_path,monkeypatch):
+    journal,clock,record=active_journal(tmp_path,monkeypatch)
+    try:
+        record('target_fenced')
+        marker=prepare_fence_files(tmp_path,journal)
+        cron=tmp_path/'source-cron';cron.write_bytes(b'tampered')
+        journal.state['source_crontab_backup']=str(cron)
+        calls=[];monkeypatch.setattr(migration,'run',lambda argv,**kw:calls.append(argv))
+        with pytest.raises(migration.MigrationError,match='crontab_backup_changed'):migration.rollback_source(tmp_path,journal)
+        assert marker.exists() and not calls
+        assert len(list((tmp_path/'.config').rglob('90-squire-migration-fence.conf')))==len(migration.FENCE_UNITS)
+    finally:journal.close()
+
+
+def test_live_group_activity_invalidates_previously_recorded_target_fence(tmp_path,monkeypatch):
+    journal,clock,record=active_journal(tmp_path,monkeypatch,activate=False)
+    try:
+        old=target_fence_fields(clock);record('target_fenced',**old)
+        clock[0]+=1
+        record('group_runtime_ready',**runtime_fields(clock))
+        record('group_roundtrip',**group_fields(tmp_path,journal,clock))
+        assert 'target_fenced' not in journal.state['gates']
+        with pytest.raises(migration.MigrationError,match='evidence_stale'):record('target_fenced',**old)
+        with pytest.raises(migration.MigrationError,match='requires_target_fence'):journal.transition('rolled_back')
+        record('target_fenced',**target_fence_fields(clock))
+        journal.transition('rolled_back')
+    finally:journal.close()
+
+
+def test_detached_writer_scan_uses_identity_tokens_not_inspection_text(tmp_path):
+    def process(pid,args):
+        p=tmp_path/str(pid);p.mkdir();(p/'cmdline').write_bytes(b'\0'.join(x.encode() for x in args))
+    process(99999001,['node','/source/bridge.js','--credentials','private-sentinel'])
+    process(99999002,['bash','/source/.hermes/scripts/wa-watchdog.sh'])
+    process(99999003,['python','-c','print("bridge.js wa-watchdog.sh")'])
+    process(99999004,['postgres','-D','/source/pg0/data'])
+    assert migration.detached_writer_pids(tmp_path)==[99999001,99999002]
+
+
+def test_target_fence_invalidates_previously_healthy_activation_proofs(tmp_path,monkeypatch):
+    journal,clock,record=active_journal(tmp_path,monkeypatch,activate=False)
+    try:
+        record('group_runtime_ready',**runtime_fields(clock))
+        record('group_roundtrip',**group_fields(tmp_path,journal,clock))
+        record('new_writer_healthy',**writer_fields(clock))
+        record('target_fenced')
+        assert not (migration.LIVE_GATES|{'new_writer_healthy'}) & journal.state['gates'].keys()
+        with pytest.raises(migration.MigrationError,match='new_writer_unverified'):journal.transition('active')
+    finally:journal.close()
+
+
+@pytest.mark.parametrize('gate,field,value',[
+    ('media_parity','evidence_kind','live_whatsapp_send'),('media_parity','ephemeral_ttl_enforced',False),
+    ('rollback_rehearsal','evidence_kind','production_restart'),('rollback_rehearsal','source_production_unchanged',False)])
+def test_preflight_media_and_rollback_cannot_require_live_sender_actions(tmp_path,gate,field,value):
+    journal=migration.Journal.create(tmp_path/'journal.json','test','sha256:'+'1'*64)
+    try:
+        fields=preflight_fields(gate);fields[field]=value
+        proof=tmp_path/'proof.json';proof.write_text(json.dumps(dict(gate=gate,migration_id='test',target_image_digest='sha256:'+'1'*64,passed=True,**fields)))
+        with pytest.raises(migration.MigrationError,match='preflight_required'):journal.record_gate(gate,proof)
+        assert gate not in journal.state['gates']
+    finally:journal.close()

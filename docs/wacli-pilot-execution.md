@@ -544,8 +544,10 @@ The actual Hermes gateway on rc12 deployment
 exact expected reply, invoked zero tools, and recorded one accepted outbox
 response. Replaying the identical event left both ledgers unchanged for ten
 seconds. The proxy recorded one successful native Anthropic generation costing
-$0.0565615, plus two zero-cost budget-denied preflight records; these are not
-three successful model calls. No further successful generation appeared after
+$0.0565615, plus two zero-cost budget denials from auxiliary session-title generation;
+these are not three successful model calls. Correlated gateway logs identify
+the title requests, and deployed proxy code counts in-flight reservations
+against the same budget. The exact retry attribution was not retained. No further successful generation appeared after
 replay. Spend-log message/response columns were empty. The temporary key was
 revoked and its alias lookup returned no keys. Cleanup deployment
 `089f0540-8e17-4776-8139-0d1d78ee1974` is healthy with no model credential and

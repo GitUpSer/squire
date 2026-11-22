@@ -26,10 +26,12 @@ FORMAT = "squire-founder-snapshot-v1"
 STATE_SCHEMA = "5bfa84adc1bfd8cbf5427a830707c82e2f63adcaf42ac3f9a51cdb5fb905cfbf"
 SOURCE_RELEASE = "v2026.9.24__be3f3d797"
 GATES = {"restored_image", "private_memory_parity", "scheduler_translation", "identity_map",
-         "group_isolation", "media_parity", "group_roundtrip", "rollback_rehearsal"}
+         "group_isolation", "media_parity", "rollback_rehearsal"}
+LIVE_GATES = {"group_runtime_ready", "group_roundtrip"}
 CUSTOMER_GATES = {"founder_soak", "first_contact"}
 FENCE_UNITS = ("hermes-stall-recovery.service", "hindsight-healthcheck.timer", "hermes-gateway.service",
                "hindsight-daemon.service", "camofox-server.service")
+FENCED_CRONTAB = b"# Squire migration: source schedules fenced; original retained privately.\n"
 SAFE_PART = re.compile(r"^[A-Za-z0-9._-]{1,150}$")
 
 
@@ -495,12 +497,106 @@ class Journal:
         return cls(path)
 
     def record_gate(self, name, evidence: Path):
-        require(name in GATES | CUSTOMER_GATES | {"target_fenced", "final_restore", "new_writer_healthy"}, "unknown_gate")
+        require(name in GATES | LIVE_GATES | CUSTOMER_GATES | {"target_fenced", "final_restore", "new_writer_healthy"}, "unknown_gate")
         report = json.loads(evidence.read_text())
         require(report.get("passed") is True and report.get("gate") == name
                 and report.get("migration_id") == self.state["migration_id"]
                 and report.get("target_image_digest") == self.state["target_image_digest"], "gate_evidence_mismatch")
         now = time.time()
+        if name in GATES:
+            require(self.state["stage"] == "preparing", "preflight_requires_preparing")
+        if name == "group_isolation":
+            selected = report.get("selected_group_sha256", "")
+            require(isinstance(selected, str) and re.fullmatch(r"[0-9a-f]{64}", selected), "selected_group_identity_required")
+            require(report.get("private_state_excluded") is True and report.get("scoped_runtime_verified") is True,
+                    "group_isolation_proof_required")
+            self.state["selected_group_sha256"] = selected
+        if name == "identity_map":
+            scope = report.get("target_writer_scope_sha256", "")
+            require(isinstance(scope, str) and re.fullmatch(r"[0-9a-f]{64}", scope)
+                    and type(report.get("provider_generation")) is int and report["provider_generation"] >= 1,
+                    "target_writer_identity_required")
+            self.state["target_writer_scope_sha256"] = scope
+            self.state["provider_generation"] = report["provider_generation"]
+        if name == "target_fenced":
+            checked = report.get("checked_at")
+            require(type(checked) in (int, float) and 0 <= now - checked <= 300
+                    and checked >= self.state.get("last_target_activity_at", 0), "target_fence_evidence_stale")
+            require(report.get("target_writer_scope_sha256") == self.state.get("target_writer_scope_sha256")
+                    and bool(self.state.get("target_writer_scope_sha256"))
+                    and type(report.get("provider_generation")) is int
+                    and report["provider_generation"] >= self.state["provider_generation"], "target_fence_identity_mismatch")
+            require(report.get("evidence_kind") == "live_target_fence" and all(report.get(field) is True for field in
+                    ("transport_outbound_disabled", "messaging_outbound_disabled", "bindings_revoked", "runtime_writers_stopped", "scheduled_grants_revoked")),
+                    "target_fence_proof_incomplete")
+        if name == "media_parity":
+            require(report.get("evidence_kind") == "offline_media_fixture"
+                    and all(report.get(field) is True for field in
+                            ("attachment_roundtrip_verified", "voice_roundtrip_verified", "ephemeral_ttl_enforced", "no_live_account_send")),
+                    "offline_media_preflight_required")
+        if name == "rollback_rehearsal":
+            require(report.get("evidence_kind") == "isolated_rollback_rehearsal"
+                    and all(report.get(field) is True for field in
+                            ("target_fence_before_source_restart", "restore_verified", "source_production_unchanged")),
+                    "isolated_rollback_preflight_required")
+        if name in LIVE_GATES:
+            require(self.state["stage"] == "target_imported" and "final_restore" in self.state["gates"],
+                    "group_roundtrip_requires_target_imported")
+        if name == "group_runtime_ready":
+            require(report.get("group_sha256") == self.state.get("selected_group_sha256")
+                    and isinstance(report.get("runtime_scope_sha256"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", report["runtime_scope_sha256"])
+                    and all(report.get(field) is True for field in
+                            ("claim_activated", "founder_admin_verified", "agent_member_verified", "isolated_runtime_verified", "model_ready", "matching_generation_heartbeat", "outbound_disabled")),
+                    "group_runtime_readiness_incomplete")
+            checked = report.get("checked_at")
+            require(type(checked) in (int, float) and self.state["target_imported_at"] <= checked <= now
+                    and now - checked <= 300, "group_runtime_readiness_stale")
+            self.state["group_runtime_scope_sha256"] = report["runtime_scope_sha256"]
+            self.state["gates"].pop("group_roundtrip", None)
+        if name == "group_roundtrip":
+            require("group_runtime_ready" in self.state["gates"]
+                    and report.get("runtime_scope_sha256") == self.state.get("group_runtime_scope_sha256"), "group_runtime_scope_mismatch")
+            require(report.get("evidence_kind") == "live_selected_group"
+                    and report.get("group_sha256") == self.state.get("selected_group_sha256")
+                    and bool(self.state.get("selected_group_sha256")), "selected_group_roundtrip_required")
+            for field in ("provider_event_sha256", "provider_reply_sha256", "runtime_scope_sha256"):
+                require(isinstance(report.get(field), str) and re.fullmatch(r"[0-9a-f]{64}", report[field]), "group_roundtrip_identity_proof_required")
+            started, completed = report.get("started_at"), report.get("completed_at")
+            require(all(type(value) in (int, float) for value in (started, completed))
+                    and self.state["target_imported_at"] <= started <= completed <= now, "group_roundtrip_must_follow_import")
+            require(all(report.get(field) is True for field in
+                        ("founder_admin_verified", "agent_member_verified", "isolated_runtime_verified", "duplicate_replay_suppressed"))
+                    and type(report.get("accepted_send_count")) is int and report["accepted_send_count"] == 1
+                    and type(report.get("visible_reply_count")) is int and report["visible_reply_count"] == 1,
+                    "group_roundtrip_acceptance_incomplete")
+            for label, boundary in (("before", started), ("after", completed)):
+                proof = report.get("source_fence_" + label) or {}
+                path = Path(proof.get("path", "/nonexistent"))
+                require(path.is_file() and checksum(path) == proof.get("sha256"), "source_fence_proof_missing_or_changed")
+                fence = json.loads(path.read_text())
+                checked = fence.get("checked_at")
+                require(fence.get("format") == "squire-source-fence-v1" and fence.get("verified") is True
+                        and fence.get("migration_id") == self.state["migration_id"]
+                        and fence.get("target_image_digest") == self.state["target_image_digest"]
+                        and fence.get("source_fenced_at") == self.state.get("source_fenced_at")
+                        and fence.get("units_stopped") == list(FENCE_UNITS)
+                        and fence.get("persistent_conditions_verified") is True and fence.get("crontab_fenced") is True
+                        and type(fence.get("detached_writer_count")) is int and fence["detached_writer_count"] == 0,
+                        "source_fence_proof_mismatch")
+                require(type(checked) in (int, float) and self.state["target_imported_at"] <= checked <= now
+                        and ((0 <= boundary - checked <= 300) if label == "before" else (0 <= checked - boundary <= 300))
+                        and now - checked <= 300, "source_fence_proof_stale")
+            self.state["live_source_fence_checked_at"] = checked
+        if name == "new_writer_healthy":
+            require(self.state["stage"] == "target_imported" and LIVE_GATES <= self.state["gates"].keys(), "new_writer_requires_live_acceptance")
+            checked = report.get("checked_at")
+            require(type(checked) in (int, float) and self.state["target_imported_at"] <= checked <= now
+                    and now - checked <= 300, "new_writer_evidence_stale")
+            require(report.get("target_writer_scope_sha256") == self.state.get("target_writer_scope_sha256")
+                    and report.get("provider_generation") == self.state.get("provider_generation")
+                    and all(report.get(field) is True for field in
+                            ("single_transport_owner", "outbound_enabled", "dm_roundtrip_verified")), "new_writer_proof_incomplete")
         if name == "founder_soak":
             require(self.state["stage"] == "active", "founder_soak_requires_active_writer")
             started, completed = report.get("soak_started_at"), report.get("soak_completed_at")
@@ -529,7 +625,13 @@ class Journal:
         if name == "scheduler_translation":
             require(re.fullmatch(r"[0-9a-f]{64}", report.get("source_crontab_sha256", "")), "reviewed_crontab_hash_required")
             self.state["source_crontab_sha256"] = report["source_crontab_sha256"]
-        self.state["gates"][name] = {"sha256": checksum(evidence), "at": now}
+        if name in LIVE_GATES | {"new_writer_healthy"}:
+            self.state["gates"].pop("target_fenced", None)
+            self.state["last_target_activity_at"] = now
+        if name == "target_fenced":
+            for gate in LIVE_GATES | {"new_writer_healthy"}:
+                self.state["gates"].pop(gate, None)
+        self.state["gates"][name] = {"sha256": checksum(evidence), "at": report["checked_at"] if name in {"target_fenced", "new_writer_healthy"} else now}
         atomic_json(self.path, self.state)
 
     def transition(self, stage, details=None):
@@ -542,8 +644,15 @@ class Journal:
             require(GATES <= self.state["gates"].keys(), "migration_gates_incomplete")
         if stage == "target_imported":
             require("final_restore" in self.state["gates"], "final_restore_unverified")
+            self.state["target_imported_at"] = time.time()
+        if stage == "source_fenced":
+            self.state["source_fenced_at"] = time.time()
         if stage == "active":
             require("new_writer_healthy" in self.state["gates"], "new_writer_unverified")
+            require(LIVE_GATES <= self.state["gates"].keys(), "live_acceptance_incomplete")
+            require(0 <= time.time() - self.state.get("live_source_fence_checked_at", 0) <= 300
+                    and 0 <= time.time() - self.state["gates"]["new_writer_healthy"]["at"] <= 300,
+                    "live_acceptance_stale")
             self.state["gates"].pop("target_fenced", None)
             for name in CUSTOMER_GATES:
                 self.state["gates"].pop(name, None)
@@ -584,7 +693,7 @@ def fence_source(home: Path, journal: Journal):
         cron_backup.chmod(0o600)
         journal.state["source_crontab_backup"] = str(cron_backup)
         journal.transition("fencing")
-    run(["crontab", "-"], stdin=b"# Squire migration: source schedules fenced; original retained privately.\n")
+    run(["crontab", "-"], stdin=FENCED_CRONTAB)
     atomic_json(marker, {"migration_id": journal.state["migration_id"], "at": time.time()})
     # Persistent negative conditions fence watchdog/timer restarts, including reboot.
     # Original unit files and source databases remain untouched for rollback.
@@ -602,26 +711,90 @@ def fence_source(home: Path, journal: Journal):
 
 
 def assert_fenced(home: Path, journal: Journal):
-    require(Path(journal.state.get("source_marker", "/nonexistent")).is_file(), "source_fence_marker_missing")
+    marker = home / ".local/state/squire-migration/source-fenced"
+    require(str(marker) == journal.state.get("source_marker") and marker.is_file(), "source_fence_marker_missing")
+    require(json.loads(marker.read_text()).get("migration_id") == journal.state["migration_id"], "source_fence_marker_mismatch")
+    for unit in FENCE_UNITS:
+        dropin = home / ".config/systemd/user" / (unit + ".d") / "90-squire-migration-fence.conf"
+        require(dropin.is_file() and dropin.read_text() == f"[Unit]\nConditionPathExists=!{marker}\n", "source_fence_condition_changed")
+    require(run(["crontab", "-l"], timeout=10) == FENCED_CRONTAB, "source_crontab_not_fenced")
     states = service_inventory()
     require(all(states.get(unit, {}).get("ActiveState") in {"inactive", "failed"} for unit in FENCE_UNITS), "source_writer_still_running")
-    # Unknown detached writers cannot be inferred away; the reviewed scheduler gate
-    # inventories crontab and non-systemd jobs before this action is enabled.
+    require(not detached_writer_pids(), "detached_source_writer_still_running")
+
+
+def detached_writer_pids(proc_root=Path("/proc")):
+    """Inspect same-user process identity tokens, never output command contents.
+
+    The preflight inventory must account for unknown/custom writers; this scan
+    also catches the actual inventoried bridge and recovery processes after
+    systemd reports its units stopped. The current probe and its ancestors are
+    excluded because their command text may contain read-only inspection code.
+    """
+    excluded, pid = set(), os.getpid()
+    while pid > 0 and pid not in excluded:
+        excluded.add(pid)
+        try:
+            status = (proc_root / str(pid) / "status").read_text()
+            pid = int(next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:")))
+        except (OSError, StopIteration, ValueError):
+            break
+    names = {"hermes", "hermes-agent", "hindsight-api", "wa-watchdog.sh", "stall_recovery.py", "bridge.js"}
+    found = []
+    for path in proc_root.glob("[0-9]*"):
+        if int(path.name) in excluded:
+            continue
+        try:
+            if path.stat().st_uid != os.getuid():
+                continue
+            arguments = [item.decode("utf-8", errors="replace") for item in (path / "cmdline").read_bytes().split(b"\0") if item]
+        except FileNotFoundError:
+            continue  # The process exited between enumeration and inspection.
+        except OSError:
+            raise MigrationError("source_process_identity_unreadable") from None
+        if any(Path(arg).name in names or arg.startswith("hermes_cli") or arg.startswith("hindsight_api")
+               or (arg.startswith("/") and "/hermes_cli/" in arg) or arg.endswith("/gateway/run.py")
+               or (arg.endswith("/server.js") and any(part.lstrip(".").startswith("camofox") for part in Path(arg).parts))
+               for arg in arguments):
+            found.append(int(path.name))
+    return found
+
+
+def source_fence_report(home: Path, journal: Journal, output: Path):
+    """Read-only source probe; stores metadata proof, never starts/stops a unit."""
+    require(journal.state["stage"] in {"source_fenced", "final_snapshot", "target_imported", "active"}
+            and type(journal.state.get("source_fenced_at")) in (int, float), "source_fence_stage_required")
+    require(not output.exists(), "fence_report_output_exists")
+    assert_fenced(home, journal)
+    report = {"format": "squire-source-fence-v1", "migration_id": journal.state["migration_id"],
+              "target_image_digest": journal.state["target_image_digest"], "source_fenced_at": journal.state["source_fenced_at"],
+              "checked_at": time.time(), "verified": True, "units_stopped": list(FENCE_UNITS),
+              "persistent_conditions_verified": True, "crontab_fenced": True, "detached_writer_count": 0}
+    atomic_json(output, report)
+    return {"verified": True, "sha256": checksum(output), "checked_at": report["checked_at"]}
 
 
 def rollback_source(home: Path, journal: Journal):
     require("target_fenced" in journal.state["gates"], "rollback_requires_target_fence")
     require(time.time() - journal.state["gates"]["target_fenced"]["at"] <= 300, "target_fence_evidence_stale")
     require(journal.state["stage"] in {"fencing", "source_fenced", "final_snapshot", "target_imported", "active", "tester_ready", "first_contact_verified"}, "rollback_wrong_stage")
+    # Validate every preserved artifact before removing any persistent fence.
+    marker = home / ".local/state/squire-migration/source-fenced"
+    require(str(marker) == journal.state.get("source_marker"), "source_fence_marker_mismatch")
+    if marker.exists():
+        require(json.loads(marker.read_text()).get("migration_id") == journal.state["migration_id"], "source_fence_marker_mismatch")
+    cron = Path(journal.state["source_crontab_backup"]).read_bytes()
+    require(hashlib.sha256(cron).hexdigest() == journal.state["source_crontab_sha256"], "crontab_backup_changed")
+    dropins = []
     for unit in FENCE_UNITS:
         dropin = home / ".config/systemd/user" / (unit + ".d") / "90-squire-migration-fence.conf"
         if dropin.exists():
-            require(journal.state["source_marker"] in dropin.read_text(), "fence_dropin_changed")
-            dropin.unlink()
-    Path(journal.state["source_marker"]).unlink(missing_ok=True)
+            require(dropin.read_text() == f"[Unit]\nConditionPathExists=!{marker}\n", "fence_dropin_changed")
+            dropins.append(dropin)
+    for dropin in dropins:
+        dropin.unlink()
+    marker.unlink(missing_ok=True)
     run(["systemctl", "--user", "daemon-reload"])
-    cron = Path(journal.state["source_crontab_backup"]).read_bytes()
-    require(hashlib.sha256(cron).hexdigest() == journal.state["source_crontab_sha256"], "crontab_backup_changed")
     run(["crontab", "-"], stdin=cron)
     for unit in reversed(FENCE_UNITS):
         if journal.state.get("original_units", {}).get(unit, {}).get("ActiveState") == "active":
@@ -645,6 +818,10 @@ def main():
     gate.add_argument("--journal", required=True, type=Path)
     gate.add_argument("--gate", required=True)
     gate.add_argument("--evidence", required=True, type=Path)
+    probe = sub.add_parser("verify-source-fence")
+    probe.add_argument("--home", type=Path, default=Path.home())
+    probe.add_argument("--journal", required=True, type=Path)
+    probe.add_argument("--output", required=True, type=Path)
     snap = sub.add_parser("snapshot")
     snap.add_argument("--home", type=Path, default=Path.home())
     snap.add_argument("--plan", required=True, type=Path)
@@ -691,6 +868,8 @@ def main():
         elif args.command == "record-gate":
             Journal(args.journal).record_gate(args.gate, args.evidence)
             result = {"recorded": args.gate}
+        elif args.command == "verify-source-fence":
+            result = source_fence_report(args.home, Journal(args.journal), args.output)
         elif args.command == "make-plan":
             plan = make_plan(args.home, json.loads(args.postgres_config.read_text()), migration_id=args.migration_id)
             require(not args.output.exists(), "plan_already_exists")

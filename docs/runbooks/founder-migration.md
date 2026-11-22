@@ -321,7 +321,16 @@ not assertions the tool manufactures. Required gates are:
 - Restored-image compatibility and private-memory parity.
 - Identity mapping and group isolation, including no private-state copy.
 - Scheduler translation, with the exact source crontab SHA-256.
-- Media parity, group roundtrip and rollback rehearsal.
+- Offline media fixtures, including attachment/voice roundtrip and enforced
+  ephemeral TTL handling; these must not send through the live account.
+- An isolated rollback rehearsal proving target fencing precedes source restart
+  and restore succeeds without restarting production.
+
+`group_roundtrip` is deliberately **not** a prerequisite for the source fence.
+A live proof through the new sender while the source sender remains active
+would violate account ownership. Offline `group_isolation` remains required
+before fencing; it binds the selected group hash and verifies isolation without
+requiring the real group runtime to exist yet.
 
 Fresh-recipient first contact is a separate customer-readiness gate after
 founder activation and soak. It is not a prerequisite to fencing the source:
@@ -332,7 +341,20 @@ Current media parity/short disappearing-message TTL and external integration
 parity are not established by these tools. Missing evidence must keep the
 source live and prevent final cutover.
 
-After all gates, `fence --execute` records an in-progress journal, preserves
+Prepare a fresh cold service/volume with `sleep infinity` and no owner
+credentials; an initialized canary volume cannot change runtime identity.
+Complete email-only account verification using an email-bound invitation.
+Hold transport in pairing mode before the source fence and both founder
+imports. Existing capture checkpoints remain intact. Create the DM binding
+immediately after fencing, then adopt the cold service through the founder
+operator API. Resume capture from its existing checkpoint without calling
+activation again. Bound messages wait for an unready runtime; unbound or
+paused-tenant messages are ignored by ingestion, so those states cannot serve
+as a migration queue. DM re-import does not update its original replay cutoff.
+Record a whole-second replay floor and reconcile the source-stop overlap:
+provider timestamps have second precision, while journal times are fractional.
+
+After all preflight gates, `fence --execute` records an in-progress journal, preserves
 the exact crontab, replaces it with an inactive marker, and installs persistent
 negative `ConditionPathExists` drop-ins on the source gateway, independent
 watchdog, healthcheck timer, Hindsight and browser service. It stops and verifies
@@ -340,14 +362,83 @@ all five units. Originals remain intact, and reboot/manual timer starts cannot
 restart the fenced units. The scheduler gate must also inventory detached
 workers/non-systemd schedulers; an unaccounted writer invalidates the gate.
 
+On the verified source, PostgreSQL runs independently in `pg0-hindsight.service`;
+the stopped Hindsight API does not own that database process. Reverify the
+database after fencing and select `--postgres-credentials instance_config` for
+the final export, since daemon-environment credentials require a running API
+PID. Preserve the application fence throughout the export.
+
 Take a new `snapshot --final --journal ...` after this fence. This snapshot is
 labelled `writers_fenced`. Repeat encrypted transfer, restore and private/group
 imports against the final artifact. Record `final_restore`, then
 `advance --stage target_imported --execute`. Configure transport/messaging
-generation consistently, activate the new binding/writer, and record fresh
-`new_writer_healthy` evidence before `advance --stage active --execute`.
+generation consistently, but leave both new outbound switches disabled.
+Complete the selected group claim and provision its isolated runtime; record
+`group_runtime_ready` against the actual scoped runtime created by that claim.
+This post-import binding avoids requiring an unknown future runtime ID during
+preflight.
+
+Run `verify-source-fence --home <source-home> --journal <journal> --output
+<new-private-report>` on the source immediately before the live test. This
+read-only command verifies the marker identity, exact persistent drop-ins,
+fenced crontab, stopped services and zero known detached Hermes/WhatsApp,
+watchdog or browser writers. It recognizes the inventoried bridge/recovery
+script identities without logging arguments. The previously reviewed scheduler
+inventory remains responsible for unknown/custom writers.
+Audit queued outbound work, invalidate any earlier target-fence proof, then
+enable only the new account sender. Complete a founder DM roundtrip and the
+selected group roundtrip. Repeat the source-fence probe immediately afterward.
+Record `group_roundtrip` and `new_writer_healthy`, then promptly run
+`advance --stage active --execute`. A failed test keeps the source fenced;
+rollback must first fence the target again.
 Record initial capture checkpoints and any in-flight work disposition in the
 private cutover evidence. Never have both old and new senders active.
+
+The gate reports now validate more than a `passed:true` assertion:
+
+- `identity_map` binds `target_writer_scope_sha256` (the reviewed account-wide
+  target ownership scope) and positive integer `provider_generation`.
+  `group_isolation` binds `selected_group_sha256` and requires
+  `private_state_excluded` and `scoped_runtime_verified`.
+- `media_parity` requires `evidence_kind:"offline_media_fixture"` and true
+  `attachment_roundtrip_verified`, `voice_roundtrip_verified`,
+  `ephemeral_ttl_enforced`, and `no_live_account_send`. Unsupported TTL handling
+  still blocks migration; changing the label cannot establish that capability.
+  `rollback_rehearsal` requires `evidence_kind:"isolated_rollback_rehearsal"`
+  and true `target_fence_before_source_restart`, `restore_verified`, and
+  `source_production_unchanged`.
+- `group_runtime_ready` is accepted only after `target_imported`. It binds
+  `group_sha256` to the selected group and `runtime_scope_sha256` to the actual
+  provisioned scope, with a `checked_at` timestamp within five minutes and
+  true `claim_activated`, `founder_admin_verified`, `agent_member_verified`,
+  `isolated_runtime_verified`, `model_ready`, `matching_generation_heartbeat`,
+  and `outbound_disabled`. Replacing this evidence clears an older roundtrip.
+- `group_roundtrip` requires `evidence_kind:"live_selected_group"`, matching
+  group/runtime hashes, SHA256 `provider_event_sha256` and
+  `provider_reply_sha256`, and `started_at`/`completed_at` after target import.
+  `accepted_send_count` and `visible_reply_count` must each equal one;
+  administrator, membership, isolation, and `duplicate_replay_suppressed`
+  checks must be true. `source_fence_before` and `source_fence_after` each hold
+  a private report `path` and its `sha256`. Both fresh source probes must match
+  this migration/image/fence, bracket the test, and be within five minutes.
+- `new_writer_healthy` follows those live gates and requires fresh `checked_at`,
+  matching target ownership hash/provider generation, and true
+  `single_transport_owner`, `outbound_enabled`, and `dm_roundtrip_verified`.
+  The `active` transition rechecks live source-fence and writer proof freshness.
+- `target_fenced` requires `evidence_kind:"live_target_fence"`, original
+  observation `checked_at` within five minutes, the matching ownership hash,
+  at least the planned provider generation, and true
+  `transport_outbound_disabled`, `messaging_outbound_disabled`,
+  `bindings_revoked`, `runtime_writers_stopped`, and `scheduled_grants_revoked`.
+  Re-recording cannot refresh an old observation. Any new group/runtime live
+  evidence invalidates a prior target fence; recording a target fence also
+  invalidates earlier target readiness and roundtrip proofs. Before any source guard is removed,
+  rollback validates all preserved cron bytes, marker ownership and drop-ins.
+
+These reports remain operator evidence, backed by the referenced private
+artifacts. The journal cannot remotely observe a sender switch on its own;
+operators must never enable the target while retaining an earlier target-fence
+claim, or treat a hash/boolean supplied without a real probe as proof.
 
 Keep wider admission closed after `active`. Record `founder_soak` evidence only
 after at least 24 hours of active founder service. Besides the common report

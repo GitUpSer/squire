@@ -69,6 +69,43 @@ def test_memory_config_preserves_bank_and_only_repoints_loopback(tmp_path):
     with pytest.raises(MigrationError,match="local_runtime"):transform.prepare_memory_config(source,tmp_path/"bad.json",before,"https://external.invalid")
 
 
+@pytest.mark.parametrize("context",["self",["self"]," SeLf ",[" SELF "]])
+def test_scoped_cron_self_context_preserves_actual_hermes_continuity(tmp_path,monkeypatch,context):
+    pytest.importorskip("hermes_cli")
+    from cron import jobs as cron_jobs
+    from cron.scheduler_prompt import _inject_context_from
+    original,jobs=source(tmp_path)
+    # Actual Hermes cron IDs are hex; use one so the upstream traversal guard
+    # participates in the regression rather than only testing our translator.
+    jobs[0].update({"id":"a1b2c3d4e5f6","context_from":context})
+    (original/"jobs.json").write_text(json.dumps({"jobs":jobs}))
+    before=transform.cron_inventory(original)
+    output=tmp_path/"output"
+    transform.transform_cron(original,output,plan_for(original,jobs))
+    translated=json.loads((output/"owner-runtime/cron/jobs.json").read_text())["jobs"][0]
+    assert translated["context_from"]==context
+    assert translated["enabled"] is False and translated["state"]=="paused"
+    assert transform.cron_inventory(original)==before
+    archives=tmp_path/"archives";own=archives/jobs[0]["id"];own.mkdir(parents=True)
+    (own/"previous.md").write_text("# Cron Job: prior\n## Response\nOWN CONTINUITY SENTINEL")
+    other=archives/"abcdef123456";other.mkdir()
+    (other/"previous.md").write_text("## Response\nOTHER SCOPE SENTINEL")
+    monkeypatch.setattr(cron_jobs,"get_cron_output_dir",lambda:archives)
+    prompt,injected=_inject_context_from(translated,"Next task")
+    assert injected and "OWN CONTINUITY SENTINEL" in prompt
+    assert "OTHER SCOPE SENTINEL" not in prompt
+
+
+@pytest.mark.parametrize("context",[["self","group-job"],["../self"],["self/../group-job"],[None]])
+def test_scoped_cron_self_does_not_allow_other_scope_or_invalid_reference(tmp_path,context):
+    original,jobs=source(tmp_path);jobs[0]["context_from"]=context
+    (original/"jobs.json").write_text(json.dumps({"jobs":jobs}))
+    output=tmp_path/"rejected"
+    with pytest.raises(MigrationError,match="cross_scope_cron_context"):
+        transform.transform_cron(original,output,plan_for(original,jobs))
+    assert not output.exists()
+
+
 def test_group_history_import_uses_actual_hermes_new_database_only_visible_rows(tmp_path,monkeypatch):
     pytest.importorskip("hermes_state")
     connect=sqlite3.connect
