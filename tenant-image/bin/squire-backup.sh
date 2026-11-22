@@ -27,18 +27,12 @@
 #
 # POSTGRES CONSISTENCY — READ BEFORE TRUSTING A RESTORE
 # -----------------------------------------------------
-# pg0's PostgreSQL cluster ($HOME/.pg0/instances/hindsight/data) is copied while it
-# is RUNNING. That is a crash-consistent copy, not a hot backup: PostgreSQL will
-# normally recover from it exactly as it recovers from a power cut, but that is a
-# "normally", not a guarantee, and a torn checkpoint can require manual recovery.
-# We accept that for alpha because the alternative — stopping Hindsight nightly —
-# means visible downtime for every tenant every night to protect memory that is
-# reconstructible from the conversation itself.
-#
-# Phase 1 fix, in preference order: `pg_dump` into the snapshot before the run
-# (needs pg0's bundled client binaries located and pinned), or restic's
-# `--stdin-from-command`. Do not claim a verified restore until one of those lands
-# AND a restore has actually been performed.
+# squire-backup-prepare.py verifies the active pg0 identity and uses its matching
+# PG18 client to make a logical dump. SQLite stores use the online backup API.
+# Raw cluster/database/WAL files are excluded; any preparation failure stops the
+# snapshot rather than falling back to unsafe live copies. Individual databases
+# are transactionally consistent, not one atomic cross-database snapshot. A full
+# restore rehearsal remains mandatory before claiming memory recovery parity.
 #
 # SCHEDULING — DEVIATION FROM THE PLAN, STATED PLAINLY
 # -----------------------------------------------------
@@ -90,6 +84,8 @@ JITTER_SECONDS="${SQUIRE_BACKUP_JITTER_SECONDS:-3600}"
 # tenant, not an archive, and every kept snapshot is B2 storage we pay for.
 KEEP_DAILY="${SQUIRE_BACKUP_KEEP_DAILY:-7}"
 KEEP_WEEKLY="${SQUIRE_BACKUP_KEEP_WEEKLY:-4}"
+KEEP_WITHIN="${SQUIRE_BACKUP_KEEP_WITHIN:-}"
+CONSISTENT_DIR="$STATE_DIR/backup-consistent/current"
 
 # Timestamp of the last SUCCESSFUL run, read by squire-heartbeat.py and reported
 # to control-api as an age. On the VOLUME, not tmpfs: a tmpfs copy would reset on
@@ -228,11 +224,20 @@ run_backup() {
     # this into anything with concurrent writers.
     "$RESTIC" unlock >/dev/null 2>&1 || true
 
+    # SQLite's online backup API and pg0's matching pg_dump replace unsafe raw
+    # live database files. A failed preparation must never fall back to them.
+    if ! "$SQUIRE_PYTHON" "$SQUIRE_BIN/squire-backup-prepare.py" --volume "$VOLUME" --destination "$CONSISTENT_DIR"; then
+        log "ERROR: consistent database preparation failed — no snapshot taken"
+        return 1
+    fi
+
     log "backing up $VOLUME"
     "$RESTIC" backup "$VOLUME" \
         --tag squire \
         --host "${TENANT_ID:-squire-tenant}" \
         --exclude-caches \
+        --exclude "$VOLUME/.pg0/instances/*/data" \
+        --exclude-file "$CONSISTENT_DIR/live-excludes.txt" \
         "${EXCLUDES[@]}"
     rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -258,10 +263,13 @@ run_backup() {
     # paying to keep) is exactly the kind of thing that stays invisible when its
     # only output goes to /dev/null.
     local forget_err
+    local retention_args=(--keep-daily "$KEEP_DAILY" --keep-weekly "$KEEP_WEEKLY")
+    if [ -n "$KEEP_WITHIN" ]; then
+        retention_args=(--keep-within "$KEEP_WITHIN")
+    fi
     if ! forget_err="$("$RESTIC" forget \
             --tag squire \
-            --keep-daily "$KEEP_DAILY" \
-            --keep-weekly "$KEEP_WEEKLY" \
+            "${retention_args[@]}" \
             --prune 2>&1 >/dev/null)"; then
         log "warning: retention/prune failed (the new snapshot is safe): ${forget_err:0:300}"
     fi

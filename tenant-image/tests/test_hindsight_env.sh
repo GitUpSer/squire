@@ -194,6 +194,15 @@ ck "embeddings use an EXPLICIT key (LLM-key fallback trap)" \
 ck "openai embeddings dimensions pinned to 384" \
    "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS=384$' "$OUT" && echo 1 || echo 0)"
 
+# --- Pilot/founder memory identity survives switching LLM providers ---
+export SQUIRE_PRESERVE_LOCAL_EMBEDDINGS=true
+bash "$BIN/squire-hindsight-env.sh" >/dev/null
+ck "pilot retains local embeddings after OpenAI connect" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_PROVIDER=local$' "$OUT" && echo 1 || echo 0)"
+ck "pilot retains exact BGE model (384 dimensions)" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL=BAAI/bge-small-en-v1.5$' "$OUT" && echo 1 || echo 0)"
+ck "pilot retains RRF reranker" "$(grep -q '^HINDSIGHT_API_RERANKER_PROVIDER=rrf$' "$OUT" && echo 1 || echo 0)"
+ck "pilot never configures OpenAI embeddings key" "$(grep -q '^HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY=' "$OUT" && echo 0 || echo 1)"
+unset SQUIRE_PRESERVE_LOCAL_EMBEDDINGS
+
 # --- custom base URL: fail toward the local model, not runtime errors ---
 cat > "$T/shm/.env" <<'E'
 OPENAI_API_KEY=sk-openai-compat
@@ -219,7 +228,7 @@ cat > "$T/fake-hindsight" <<'F'
 echo "PROVIDER=$HINDSIGHT_API_LLM_PROVIDER KEY=$HINDSIGHT_API_LLM_API_KEY"
 F
 chmod +x "$T/fake-hindsight"
-wrapped="$(SQUIRE_HINDSIGHT_BIN="$T/fake-hindsight" bash "$BIN/squire-hindsight-run.sh" 2>&1)"
+wrapped="$(SQUIRE_HINDSIGHT_BIN="$T/fake-hindsight" SQUIRE_HINDSIGHT_PYTHON=python3 HINDSIGHT_API_DATABASE_URL=postgresql://fixture bash "$BIN/squire-hindsight-run.sh" 2>&1)"
 ck "wrapper exports creds to the daemon" \
   "$(echo "$wrapped" | grep -q 'PROVIDER=anthropic KEY=sk-ant-super-secret' && echo 1 || echo 0)" "$wrapped"
 

@@ -98,7 +98,6 @@ class TrialKeyClient:
             # by version, so these are advisory: the $2 `max_budget` above is the
             # guarantee, and the per-day message count is additionally enforced by
             # the tenant/concierge. Verify against the deployed LiteLLM in Task 0.5.
-            "budget_duration": "1d",
             "soft_budget": self._settings.trial_daily_budget_usd,
             "rpm_limit": self._settings.trial_rpm_limit,
         }

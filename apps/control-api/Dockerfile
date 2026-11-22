@@ -7,13 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependency layer first: pyproject alone (plus a stub package dir, which `pip
-# install .` needs to resolve the build) so that editing source does not
-# reinstall FastAPI/SQLModel/psycopg on every build.
-COPY pyproject.toml ./
-RUN mkdir -p src/control_api \
-    && touch src/control_api/__init__.py \
-    && pip install --no-cache-dir .
+# Frozen runtime dependency graph exported from the pre-existing uv.lock.
+COPY pyproject.toml requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Real source last -- this is the layer that actually changes between deploys.
 COPY src ./src
@@ -28,8 +24,6 @@ USER squire
 ENV PORT=8080
 EXPOSE 8080
 
-# `sh -c` is needed for ${PORT} expansion, and `exec` is what makes uvicorn PID 1
-# rather than a child of the shell -- without it Railway's SIGTERM on redeploy or
-# serverless-sleep would go to `sh`, which does not forward it, and the container
-# would be SIGKILLed after the grace period instead of shutting down cleanly.
-CMD ["sh", "-c", "exec uvicorn control_api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Console entry point prebinds a real dual-stack socket for Railway probes and
+# private networking; uvicorn --host :: alone creates an IPv6-only listener.
+CMD ["squire-control-api"]

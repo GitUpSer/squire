@@ -1,0 +1,494 @@
+diff --git a/cmd/wacli/root.go b/cmd/wacli/root.go
+index 5f29943..2b54e9f 100644
+--- a/cmd/wacli/root.go
++++ b/cmd/wacli/root.go
+@@ -42,14 +42,15 @@ func effectiveVersion() string {
+ const docsURL = "https://wacli.sh"
+ 
+ type rootFlags struct {
+-	storeDir   string
+-	account    string
+-	asJSON     bool
+-	fullOutput bool
+-	events     bool
+-	timeout    time.Duration
+-	readOnly   bool
+-	lockWait   time.Duration
++	squireExpiresAt int64
++	storeDir        string
++	account         string
++	asJSON          bool
++	fullOutput      bool
++	events          bool
++	timeout         time.Duration
++	readOnly        bool
++	lockWait        time.Duration
+ }
+ 
+ func execute(args []string) error {
+@@ -68,6 +69,7 @@ func execute(args []string) error {
+ 	}
+ 	rootCmd.SetVersionTemplate("wacli {{.Version}}\n")
+ 
++	rootCmd.PersistentFlags().Int64Var(&flags.squireExpiresAt, "squire-expires-at", 0, "absolute pilot dispatch deadline in Unix seconds")
+ 	rootCmd.PersistentFlags().StringVar(&flags.storeDir, "store", "", "store directory (default: $WACLI_STORE_DIR, XDG state dir on Linux, or ~/.wacli)")
+ 	rootCmd.PersistentFlags().StringVar(&flags.account, "account", "", "named account from config.yaml")
+ 	rootCmd.PersistentFlags().BoolVar(&flags.asJSON, "json", false, "output JSON instead of human-readable text")
+@@ -211,6 +213,14 @@ func (f *rootFlags) requireWritable() error {
+ }
+ 
+ func withTimeout(ctx context.Context, flags *rootFlags) (context.Context, context.CancelFunc) {
++	if flags.squireExpiresAt > 0 {
++		deadline := time.Unix(flags.squireExpiresAt, 0)
++		timeoutDeadline := time.Now().Add(flags.timeout)
++		if flags.timeout > 0 && timeoutDeadline.Before(deadline) {
++			deadline = timeoutDeadline
++		}
++		return context.WithDeadline(ctx, deadline)
++	}
+ 	if flags.timeout <= 0 {
+ 		return context.WithCancel(ctx)
+ 	}
+diff --git a/cmd/wacli/send_ipc.go b/cmd/wacli/send_ipc.go
+index 54d316c..d333564 100644
+--- a/cmd/wacli/send_ipc.go
++++ b/cmd/wacli/send_ipc.go
+@@ -124,6 +124,9 @@ func delegateSend(ctx context.Context, flags *rootFlags, req sendDelegateRequest
+ 	defer conn.Close()
+ 
+ 	deadline := time.Now().Add(commandTimeout(flags))
++	if flags.squireExpiresAt > 0 && time.Unix(flags.squireExpiresAt, 0).Before(deadline) {
++		deadline = time.Unix(flags.squireExpiresAt, 0)
++	}
+ 	if req.Kind == mediaDownloadKind {
+ 		// Cache inspection and lock waits already consumed this command's
+ 		// budget. Never grant recovery a new full timeout after those stages.
+diff --git a/internal/app/fake_wa_test.go b/internal/app/fake_wa_test.go
+index b9da53c..ebd07cd 100644
+--- a/internal/app/fake_wa_test.go
++++ b/internal/app/fake_wa_test.go
+@@ -793,7 +793,8 @@ func (f *fakeWA) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo
+ 			ID:        webMsg.GetKey().GetID(),
+ 			Timestamp: time.Unix(int64(webMsg.GetMessageTimestamp()), 0).UTC(),
+ 		},
+-		RawMessage: webMsg.GetMessage(),
++		RawMessage:   webMsg.GetMessage(),
++		SourceWebMsg: webMsg,
+ 	}
+ 	evt.UnwrapRaw()
+ 	return evt, nil
+diff --git a/internal/app/sync.go b/internal/app/sync.go
+index 7f38e75..0c1940a 100644
+--- a/internal/app/sync.go
++++ b/internal/app/sync.go
+@@ -404,6 +404,7 @@ func (a *App) upsertMessageChat(pm wa.ParsedMessage, name string) error {
+ }
+ 
+ type messageStoreOptions struct {
++	squireLiveOrigin         bool
+ 	archiveIncoming          bool
+ 	archiveObservedMS        int64
+ 	archiveSettingObservedMS int64
+@@ -522,6 +523,9 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage, optio
+ 	}
+ 
+ 	if err := a.db.UpsertMessage(store.UpsertMessageParams{
++		SquireLiveOrigin:         options.squireLiveOrigin,
++		SquireExpiryKnown:        pm.SquireExpiryKnown,
++		SquireExpiresAt:          pm.SquireExpiresAt,
+ 		ArchiveIncoming:          options.archiveIncoming,
+ 		ArchiveObservedMS:        options.archiveObservedMS,
+ 		ArchiveSettingObservedMS: options.archiveSettingObservedMS,
+diff --git a/internal/app/sync_events.go b/internal/app/sync_events.go
+index 73a443f..6c3cfc7 100644
+--- a/internal/app/sync_events.go
++++ b/internal/app/sync_events.go
+@@ -622,14 +622,14 @@ func (a *App) handleLiveSyncMessage(ctx context.Context, opts SyncOptions, v *ev
+ 	// Protocol retries can share an ID with decoded content. Preserve useful
+ 	// payloads so a later retry cannot look like a first unread transition.
+ 	// An explicit empty edit is a content update, not a protocol retry.
+-	if !pm.Edited && !pm.HasContent() && pm.ID != "" && !pm.Chat.IsEmpty() && pm.Chat != types.StatusBroadcastJID {
++	if pm.SquireExpiryKnown && pm.SquireExpiresAt == nil && !pm.Edited && !pm.HasContent() && pm.ID != "" && !pm.Chat.IsEmpty() && pm.Chat != types.StatusBroadcastJID {
+ 		chat := canonicalJIDString(a.canonicalStoreJID(ctx, pm.Chat))
+ 		if existing, err := a.db.GetMessage(chat, pm.ID); err == nil && !liveUnreadPlaceholder(existing) {
+ 			return
+ 		}
+ 	}
+ 	incrementUnread := a.shouldIncrementLiveUnread(ctx, pm)
+-	storeOptions := messageStoreOptions{archiveIncoming: incrementUnread && !pm.Edited && !archiveDisabled, archiveObservedMS: observedArchiveMS, archiveSettingObservedMS: observedSettingMS}
++	storeOptions := messageStoreOptions{squireLiveOrigin: v.SourceWebMsg == nil, archiveIncoming: incrementUnread && !pm.Edited && !archiveDisabled, archiveObservedMS: observedArchiveMS, archiveSettingObservedMS: observedSettingMS}
+ 	stored := false
+ 	if storeOptions.archiveIncoming {
+ 		if ticket, queued := a.appStatePersist.reserveAfterPending(); queued {
+diff --git a/internal/app/sync_history_wrappers_test.go b/internal/app/sync_history_wrappers_test.go
+index 7079b53..41e0d27 100644
+--- a/internal/app/sync_history_wrappers_test.go
++++ b/internal/app/sync_history_wrappers_test.go
+@@ -39,7 +39,8 @@ func TestHistorySyncStoresContentInsideEphemeralWrapper(t *testing.T) {
+ 			FromMe:    proto.Bool(false),
+ 			ID:        proto.String("ephemeral-1"),
+ 		},
+-		MessageTimestamp: proto.Uint64(uint64(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC).Unix())),
++		EphemeralDuration: proto.Uint32(60),
++		MessageTimestamp:  proto.Uint64(uint64(time.Now().Unix())),
+ 		Message: &waProto.Message{
+ 			EphemeralMessage: &waProto.FutureProofMessage{
+ 				Message: &waProto.Message{
+@@ -76,15 +77,16 @@ func TestHistorySyncDecryptsEncryptedReactionInsideEphemeralWrapper(t *testing.T
+ 		Key:  &waCommon.MessageKey{ID: proto.String("m-text")},
+ 	}
+ 
+-	base := time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)
++	base := time.Now()
+ 	textMsg := &waWeb.WebMessageInfo{
+ 		Key: &waCommon.MessageKey{
+ 			RemoteJID: proto.String(chat.String()),
+ 			FromMe:    proto.Bool(false),
+ 			ID:        proto.String("m-text"),
+ 		},
+-		MessageTimestamp: proto.Uint64(uint64(base.Unix())),
+-		Message:          &waProto.Message{Conversation: proto.String("hello")},
++		EphemeralDuration: proto.Uint32(60),
++		MessageTimestamp:  proto.Uint64(uint64(base.Unix())),
++		Message:           &waProto.Message{Conversation: proto.String("hello")},
+ 	}
+ 	reactionMsg := &waWeb.WebMessageInfo{
+ 		Key: &waCommon.MessageKey{
+@@ -92,7 +94,8 @@ func TestHistorySyncDecryptsEncryptedReactionInsideEphemeralWrapper(t *testing.T
+ 			FromMe:    proto.Bool(false),
+ 			ID:        proto.String("m-enc-react"),
+ 		},
+-		MessageTimestamp: proto.Uint64(uint64(base.Add(time.Second).Unix())),
++		EphemeralDuration: proto.Uint32(60),
++		MessageTimestamp:  proto.Uint64(uint64(base.Add(time.Second).Unix())),
+ 		Message: &waProto.Message{
+ 			EphemeralMessage: &waProto.FutureProofMessage{
+ 				Message: &waProto.Message{
+@@ -141,8 +144,9 @@ func TestHistoryPayloadsThroughCLI(t *testing.T) {
+ 	var messages []*waWeb.WebMessageInfo
+ 	for i, payload := range payloads {
+ 		messages = append(messages, &waWeb.WebMessageInfo{
+-			Key:              &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String(ids[i])},
+-			MessageTimestamp: proto.Uint64(1700000000 + uint64(i)), Message: payload,
++			Key:               &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String(ids[i])},
++			EphemeralDuration: proto.Uint32(60),
++			MessageTimestamp:  proto.Uint64(uint64(time.Now().Unix()) + uint64(i)), Message: payload,
+ 		})
+ 	}
+ 	var stored, lastEvent atomic.Int64
+diff --git a/internal/app/sync_polls_test.go b/internal/app/sync_polls_test.go
+index 3f9ed4e..d3b8ff0 100644
+--- a/internal/app/sync_polls_test.go
++++ b/internal/app/sync_polls_test.go
+@@ -148,14 +148,15 @@ func TestHistorySyncStoresWrappedSelfPollWithLinkedSender(t *testing.T) {
+ 	a.wa = f
+ 
+ 	chat := types.JID{User: "555", Server: types.DefaultUserServer}
+-	created := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
++	created := time.Now()
+ 	hist := &waWeb.WebMessageInfo{
+ 		Key: &waCommon.MessageKey{
+ 			RemoteJID: proto.String(chat.String()),
+ 			FromMe:    proto.Bool(true),
+ 			ID:        proto.String("POLL-HIST"),
+ 		},
+-		MessageTimestamp: proto.Uint64(uint64(created.Unix())),
++		EphemeralDuration: proto.Uint32(60),
++		MessageTimestamp:  proto.Uint64(uint64(created.Unix())),
+ 		Message: &waProto.Message{
+ 			EphemeralMessage: &waProto.FutureProofMessage{
+ 				Message: &waProto.Message{
+diff --git a/internal/store/db.go b/internal/store/db.go
+index 25ff9be..606aa44 100644
+--- a/internal/store/db.go
++++ b/internal/store/db.go
+@@ -62,6 +62,7 @@ func open(path string, readOnly bool) (*DB, error) {
+ 			return nil, fmt.Errorf("open read-only sqlite: %w", err)
+ 		}
+ 		s.ftsEnabled = s.detectMessagesFTS()
++
+ 		s.receiptsEnabled = s.hasTable("message_receipts")
+ 		return s, nil
+ 	}
+@@ -69,6 +70,44 @@ func open(path string, readOnly bool) (*DB, error) {
+ 		_ = db.Close()
+ 		return nil, err
+ 	}
++	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS squire_change_origins(sequence INTEGER PRIMARY KEY, live INTEGER NOT NULL)`); err != nil {
++		_ = db.Close()
++		return nil, err
++	}
++	if !s.hasTable("squire_message_expiry") {
++		tx, err := db.Begin()
++		if err != nil {
++			_ = db.Close()
++			return nil, err
++		}
++		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS squire_message_expiry (
++ chat_jid TEXT NOT NULL,msg_id TEXT NOT NULL,known INTEGER NOT NULL,expires_at INTEGER,
++ PRIMARY KEY(chat_jid,msg_id));
++ CREATE INDEX IF NOT EXISTS squire_expiry_deadline ON squire_message_expiry(expires_at);
++ CREATE INDEX IF NOT EXISTS squire_expiry_known ON squire_message_expiry(known);
++ CREATE TRIGGER IF NOT EXISTS squire_expiry_changed AFTER UPDATE ON squire_message_expiry
++ WHEN (old.known IS NOT new.known OR old.expires_at IS NOT new.expires_at)
++ AND (SELECT suppress FROM change_state WHERE id=1)=0 BEGIN
++ INSERT INTO message_changes(recorded_at,operation,chat_jid,msg_id,reason,message_ts)
++ SELECT CAST(strftime('%s','now') AS INTEGER),'upsert',chat_jid,msg_id,'squire_expiry',ts
++ FROM messages WHERE chat_jid=new.chat_jid AND msg_id=new.msg_id; END;`); err != nil {
++			_ = tx.Rollback()
++			_ = db.Close()
++			return nil, err
++		}
++		if s.hasTable("messages") {
++			if _, err := tx.Exec(`INSERT OR IGNORE INTO squire_message_expiry(chat_jid,msg_id,known) SELECT chat_jid,msg_id,0 FROM messages`); err != nil {
++				_ = tx.Rollback()
++				_ = db.Close()
++				return nil, err
++			}
++		}
++		if err := tx.Commit(); err != nil {
++			_ = db.Close()
++			return nil, err
++		}
++	}
++
+ 	s.receiptsEnabled = s.hasTable("message_receipts")
+ 	if err := sqliteutil.ChmodFiles(path, 0o600); err != nil {
+ 		_ = db.Close()
+diff --git a/internal/store/lid_migration.go b/internal/store/lid_migration.go
+index 62a4511..fc0d413 100644
+--- a/internal/store/lid_migration.go
++++ b/internal/store/lid_migration.go
+@@ -114,6 +114,12 @@ func (d *DB) MigrateLIDToPN(lidJID, pnJID string) error {
+ 	if _, err := tx.Exec(`UPDATE change_state SET suppress=1 WHERE id=1`); err != nil {
+ 		return err
+ 	}
++	if _, err := tx.Exec(`INSERT INTO squire_message_expiry(chat_jid,msg_id,known,expires_at)
++ SELECT ?,msg_id,known,expires_at FROM squire_message_expiry WHERE chat_jid=?
++ ON CONFLICT(chat_jid,msg_id) DO UPDATE SET known=min(known,excluded.known),
++ expires_at=CASE WHEN expires_at IS NULL THEN excluded.expires_at WHEN excluded.expires_at IS NULL THEN expires_at ELSE min(expires_at,excluded.expires_at) END`, pnJID, lidJID); err != nil {
++		return err
++	}
+ 	if err := migrateLIDMessagesToPN(tx, lidJID, pnJID); err != nil {
+ 		return err
+ 	}
+diff --git a/internal/store/messages.go b/internal/store/messages.go
+index c948b63..afb5952 100644
+--- a/internal/store/messages.go
++++ b/internal/store/messages.go
+@@ -15,6 +15,9 @@ import (
+ var ErrMessageNotTombstoned = errors.New("message is not tombstoned")
+ 
+ type UpsertMessageParams struct {
++	SquireLiveOrigin         bool
++	SquireExpiryKnown        bool
++	SquireExpiresAt          *int64
+ 	ArchiveIncoming          bool
+ 	ArchiveObservedMS        int64
+ 	ArchiveSettingObservedMS int64
+@@ -143,14 +146,21 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
+ 		MsgID_2:         strings.TrimSpace(p.MsgID),
+ 	}
+ 	markRead := p.marksChatRead()
+-	if !p.ArchiveIncoming && !markRead {
+-		return d.q.UpsertMessage(storeCtx(), params)
+-	}
++
+ 	tx, err := d.sql.Begin()
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer tx.Rollback()
++	// Squire pilot: origin and message change commit atomically. Default unknown/history
++	// can never gain live provenance from an unrelated late history import.
++	if _, err := tx.Exec(`UPDATE chats SET unread=unread WHERE jid=?`, p.ChatJID); err != nil {
++		return err
++	}
++	var squireBefore int64
++	if err := tx.QueryRow(`SELECT COALESCE(MAX(sequence),0) FROM message_changes`).Scan(&squireBefore); err != nil {
++		return err
++	}
+ 	// Decide and write under the writer lock before reading message state.
+ 	// A deferred read-then-write transaction can fail with SQLITE_BUSY_SNAPSHOT.
+ 	if p.ArchiveIncoming {
+@@ -167,9 +177,21 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
+ 		}
+ 		markRead = !stored
+ 	}
++	if _, err := tx.Exec(`INSERT INTO squire_message_expiry(chat_jid,msg_id,known,expires_at) VALUES (?,?,?,?)
++ ON CONFLICT(chat_jid,msg_id) DO UPDATE SET known=min(known,excluded.known),
++ expires_at=CASE WHEN expires_at IS NULL THEN excluded.expires_at WHEN excluded.expires_at IS NULL THEN expires_at ELSE min(expires_at,excluded.expires_at) END`,
++		p.ChatJID, p.MsgID, boolToInt64(p.SquireExpiryKnown), p.SquireExpiresAt); err != nil {
++		return err
++	}
+ 	if err := d.q.WithTx(tx).UpsertMessage(storeCtx(), params); err != nil {
+ 		return err
+ 	}
++	if _, err := tx.Exec(`INSERT INTO squire_change_origins(sequence,live) SELECT sequence,? FROM message_changes WHERE sequence>? AND chat_jid=? AND msg_id=?`, boolToInt64(p.SquireLiveOrigin), squireBefore, p.ChatJID, p.MsgID); err != nil {
++		return err
++	}
++	if _, err := tx.Exec(`DELETE FROM squire_change_origins WHERE sequence < (SELECT floor FROM change_state WHERE id=1)`); err != nil {
++		return err
++	}
+ 	if markRead {
+ 		if err := clearChatUnreadThrough(tx, p.ChatJID, p.Timestamp, []string{p.MsgID}, true); err != nil {
+ 			return err
+diff --git a/internal/wa/messages.go b/internal/wa/messages.go
+index f3cf2f0..7c01f3a 100644
+--- a/internal/wa/messages.go
++++ b/internal/wa/messages.go
+@@ -72,31 +72,33 @@ type PollAddOptionRef struct {
+ }
+ 
+ type ParsedMessage struct {
+-	Chat             types.JID
+-	ID               string
+-	SenderJID        string
+-	Timestamp        time.Time
+-	FromMe           bool
+-	Text             string
+-	Buttons          []Button
+-	Media            *Media
+-	Location         *Location
+-	Poll             *Poll
+-	PollVote         *PollVoteRef
+-	PollAdd          *PollAddOptionRef
+-	PushName         string
+-	ReplyToID        string
+-	ReplyToSenderJID string
+-	ReplyToDisplay   string
+-	ReactionToID     string
+-	ReactionEmoji    string
+-	IsForwarded      bool
+-	ForwardingScore  uint32
+-	StarredKnown     bool
+-	Starred          bool
+-	Edited           bool
+-	Revoked          bool
+-	Call             *ParsedCallEvent
++	SquireExpiryKnown bool
++	SquireExpiresAt   *int64
++	Chat              types.JID
++	ID                string
++	SenderJID         string
++	Timestamp         time.Time
++	FromMe            bool
++	Text              string
++	Buttons           []Button
++	Media             *Media
++	Location          *Location
++	Poll              *Poll
++	PollVote          *PollVoteRef
++	PollAdd           *PollAddOptionRef
++	PushName          string
++	ReplyToID         string
++	ReplyToSenderJID  string
++	ReplyToDisplay    string
++	ReactionToID      string
++	ReactionEmoji     string
++	IsForwarded       bool
++	ForwardingScore   uint32
++	StarredKnown      bool
++	Starred           bool
++	Edited            bool
++	Revoked           bool
++	Call              *ParsedCallEvent
+ 	// UnhandledPayload names the populated waE2E.Message field when parsing
+ 	// extracted no content at all. Empty when the message was understood.
+ 	UnhandledPayload string
+@@ -120,7 +122,9 @@ func ParseLiveMessage(evt *events.Message) ParsedMessage {
+ 		applyDeviceSentDestination(evt.Info.DeviceSentMeta.DestinationJID, &msg)
+ 	}
+ 
+-	markUnhandledPayload(extractWAProto(evt.Message, &msg), &msg)
++	leaf := extractWAProto(evt.Message, &msg)
++	markUnhandledPayload(leaf, &msg)
++	applySquireExpiry(evt, leaf, &msg)
+ 	return msg
+ }
+ 
+@@ -156,14 +160,16 @@ func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo) ParsedMes
+ 		// document-with-caption envelopes would otherwise be stored as
+ 		// "(message)". Apply the same unwrapping, then carry over what the
+ 		// envelopes said about the message.
+-		evt := (&events.Message{RawMessage: raw}).UnwrapRaw()
++		evt := (&events.Message{RawMessage: raw, SourceWebMsg: hist}).UnwrapRaw()
+ 		if evt.Info.DeviceSentMeta != nil {
+ 			applyDeviceSentDestination(evt.Info.DeviceSentMeta.DestinationJID, &pm)
+ 		}
+ 		if evt.IsEdit {
+ 			pm.Edited = true
+ 		}
+-		markUnhandledPayload(extractWAProto(evt.Message, &pm), &pm)
++		leaf := extractWAProto(evt.Message, &pm)
++		markUnhandledPayload(leaf, &pm)
++		applySquireExpiry(evt, leaf, &pm)
+ 	}
+ 	return pm
+ }
+@@ -533,3 +539,34 @@ func groupInviteText(invite *waE2E.GroupInviteMessage) string {
+ 	}
+ 	return "[Group invite]"
+ }
++
++// Unknown expiry and view-once content never enter the pilot payload store.
++func applySquireExpiry(evt *events.Message, leaf *waProto.Message, pm *ParsedMessage) {
++	ctx := contextInfoForMessage(leaf)
++	seconds := ctx.GetExpiration()
++	start := pm.Timestamp.Unix()
++	if hist := evt.SourceWebMsg; hist != nil {
++		if duration := hist.GetEphemeralDuration(); duration > 0 && (seconds == 0 || duration < seconds) {
++			seconds = duration
++		}
++		if stamp := hist.GetEphemeralStartTimestamp(); stamp > 0 {
++			evt.IsEphemeral = true
++			if start > 0 && stamp < uint64(start) {
++				start = int64(stamp)
++			}
++		}
++	}
++	pm.SquireExpiryKnown = leaf != nil && !evt.IsViewOnce && !evt.IsViewOnceV2 && !evt.IsViewOnceV2Extension &&
++		leaf.GetEphemeralMessage() == nil && leaf.GetViewOnceMessage() == nil &&
++		leaf.GetViewOnceMessageV2() == nil && leaf.GetViewOnceMessageV2Extension() == nil &&
++		(!evt.IsEphemeral || seconds > 0)
++	if seconds > 0 {
++		at := start + int64(seconds)
++		pm.SquireExpiresAt = &at
++		pm.SquireExpiryKnown = pm.SquireExpiryKnown && pm.Timestamp.Unix() > 0 && at <= 253402300799
++	}
++	if !pm.SquireExpiryKnown || (pm.SquireExpiresAt != nil && *pm.SquireExpiresAt <= time.Now().Unix()) {
++		*pm = ParsedMessage{Chat: pm.Chat, ID: pm.ID, SenderJID: pm.SenderJID, Timestamp: pm.Timestamp,
++			FromMe: pm.FromMe, SquireExpiryKnown: pm.SquireExpiryKnown, SquireExpiresAt: pm.SquireExpiresAt}
++	}
++}
+diff --git a/internal/wa/messages_history_wrappers_test.go b/internal/wa/messages_history_wrappers_test.go
+index 39738bc..0ca2f55 100644
+--- a/internal/wa/messages_history_wrappers_test.go
++++ b/internal/wa/messages_history_wrappers_test.go
+@@ -15,8 +15,9 @@ func historyMessage(msg *waProto.Message) *waProto.WebMessageInfo {
+ 			FromMe:    proto.Bool(false),
+ 			RemoteJID: proto.String("123@s.whatsapp.net"),
+ 		},
+-		MessageTimestamp: proto.Uint64(uint64(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC).Unix())),
+-		Message:          msg,
++		MessageTimestamp:  proto.Uint64(uint64(time.Now().Unix())),
++		Message:           msg,
++		EphemeralDuration: proto.Uint32(60),
+ 	}
+ }
+ 
+@@ -38,8 +39,12 @@ func TestParseHistoryMessageUnwrapsContentEnvelopes(t *testing.T) {
+ 	for _, tc := range cases {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			pm := ParseHistoryMessage("123@s.whatsapp.net", historyMessage(tc.msg))
+-			if pm.Text != "disappearing hello" {
+-				t.Fatalf("Text = %q, want wrapped text", pm.Text)
++			if tc.name == "ephemeral" {
++				if pm.Text != "disappearing hello" || !pm.SquireExpiryKnown || pm.SquireExpiresAt == nil {
++					t.Fatal("supported expiring wrapper lost content/deadline")
++				}
++			} else if pm.Text != "" || pm.SquireExpiryKnown {
++				t.Fatal("view-once must remain blocked")
+ 			}
+ 			if pm.UnhandledPayload != "" {
+ 				t.Fatalf("UnhandledPayload = %q, want empty", pm.UnhandledPayload)

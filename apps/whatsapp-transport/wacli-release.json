@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/openclaw/wacli",
+  "version": "0.26.0",
+  "tag": "v0.26.0",
+  "commit": "535a8b969cc83c3aad57f66be77e8fd4a7fcaaa3",
+  "linux_amd64_sha256": "2c28f65e2f9aaf32585288229db1f916c6c5fb5db9513715017d528513604b44",
+  "linux_arm64_sha256": "777a5dccece12421b7ee4af001b074e5ebc1c7a63f732cf642c3e7b3c4d7c7b9",
+  "native_inbound_mentions": false,
+  "group_info_delegated": false,
+  "receipt_changes_journal": false,
+  "pilot_build_version": "0.26.0-squire.2",
+  "origin_patch_sha256": "e51a043ca961f3cf872309dc520546194fa562d5663fe134de6059c4f3a22db2",
+  "durable_live_origin": true,
+  "durable_message_expiry": true
+}

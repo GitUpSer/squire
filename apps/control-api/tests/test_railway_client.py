@@ -298,3 +298,46 @@ def test_delete_service_tolerates_missing_service(railway):
         return_value=httpx.Response(200, json={"errors": [{"message": "Service not found"}]})
     )
     assert railway.delete_service("svc-1") is False
+
+
+def test_runtime_backup_bucket_adopts_existing_paginated_identity(railway, monkeypatch):
+    calls=[]
+    def gql(query,variables):
+        calls.append((query,variables))
+        if variables["after"] is None:
+            return {"project":{"buckets":{"edges":[],"pageInfo":{"hasNextPage":True,"endCursor":"page-two"}}}}
+        return {"project":{"buckets":{"edges":[{"node":{"id":"bucket-one","name":"backup-runtime-one","deletedAt":None}}],"pageInfo":{"hasNextPage":False}}}}
+    monkeypatch.setattr(railway,"_gql",gql)
+    assert railway.ensure_runtime_bucket("runtime-one")=="backup-runtime-one"
+    assert len(calls)==2 and calls[1][1]["after"]=="page-two"
+    assert all("secret" not in query.lower() and "bucketCreate" not in query for query,_ in calls)
+
+
+def test_runtime_backup_bucket_adopts_uncertain_creation(railway, monkeypatch):
+    probes=iter([None,"bucket-one"]);calls=[]
+    monkeypatch.setattr(railway,"find_bucket_by_name",lambda name:next(probes))
+    def gql(query,variables):
+        calls.append(variables)
+        raise RailwayError("outcome uncertain")
+    monkeypatch.setattr(railway,"_gql",gql)
+    assert railway.ensure_runtime_bucket("runtime-one")=="backup-runtime-one"
+    assert calls==[{"input":{"projectId":"proj-123","name":"backup-runtime-one"}}]
+
+
+@respx.mock
+def test_private_registry_credentials_only_in_railway_image_config(railway, monkeypatch):
+    import json
+    from control_api.config import get_settings
+    monkeypatch.setattr(get_settings(),"tenant_registry_username","registry-reader")
+    monkeypatch.setattr(get_settings(),"tenant_registry_password","registry-password-secret")
+    route=respx.post(GQL).mock(return_value=gql_response({"serviceCreate":{"id":"private-service"}}))
+    assert railway.create_service("private","ghcr.io/org/image@sha256:digest")=="private-service"
+    payload=json.loads(route.calls.last.request.content)["variables"]["input"]
+    assert payload["registryCredentials"]=={"username":"registry-reader","password":"registry-password-secret"}
+    assert "variables" not in payload
+    railway.configure_service_instance("private-service",image="ghcr.io/org/image@sha256:digest")
+    payload=json.loads(route.calls.last.request.content)["variables"]["input"]
+    assert payload["registryCredentials"]["password"]=="registry-password-secret"
+    route.mock(return_value=httpx.Response(200,json={"errors":[{"message":"echo registry-password-secret"}]}))
+    with pytest.raises(RailwayError) as error:railway.create_service("private","image")
+    assert "registry-password-secret" not in str(error.value)

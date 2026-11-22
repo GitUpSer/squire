@@ -29,30 +29,12 @@ import squire_codex_device as dev  # noqa: E402
 import squire_connect  # noqa: E402
 
 
-def _state_dir() -> str:
-    state_dir = os.environ.get("SQUIRE_STATE_DIR")
-    if not state_dir:
-        home = os.environ.get("HERMES_HOME") or "/opt/data"
-        state_dir = os.path.join(home, ".squire")
-    return state_dir
-
-
-def _status_path() -> str:
-    return os.path.join(_state_dir(), "llm-connect-status.json")
-
-
 def write_status(state: str, **extra) -> None:
-    payload = {"state": state, "updated": dev.iso_utc(time.time()), **extra}
-    squire_connect._atomic_write_0600(
-        _status_path(), json.dumps(payload).encode("utf-8")
-    )
+    squire_connect.write_connection_status(state, **extra)
 
 
 def read_status() -> dict:
-    try:
-        return json.loads(open(_status_path(), "rb").read())
-    except (OSError, ValueError):
-        return {"state": "none"}
+    return squire_connect.connection_status()
 
 
 def public_domain() -> str:
@@ -72,6 +54,9 @@ NOT_ENABLED_INSTRUCTIONS = (
 
 
 def cmd_mint_link() -> int:
+    if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+        print(json.dumps({"state":"error","detail":"Connect providers in your private agent."}))
+        return 1
     domain = public_domain()
     if not domain:
         print(json.dumps({"state": "no_public_domain",
@@ -105,6 +90,8 @@ def store_chatgpt_tokens(tokens: dict) -> None:
     API-key path, is untouched: those two genuinely do belong in .env.)
     """
     home = os.environ.get("HERMES_HOME") or "/opt/data"
+    if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+        raise RuntimeError("private providers are not available in groups")
     # auth.json is normally a SYMLINK the entrypoint points into tmpfs, so the
     # write follows the link off the persistent volume. Apply the SAME
     # fail-closed guard the .env write already uses (env_upsert ->
@@ -142,6 +129,9 @@ def store_chatgpt_tokens(tokens: dict) -> None:
 
 
 def cmd_start_openai_device() -> int:
+    if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+        print(json.dumps({"state":"error","detail":"Connect providers in your private agent."}))
+        return 1
     cfg = dev.DeviceFlowConfig()
     try:
         started = dev.request_user_code(cfg)
@@ -212,17 +202,16 @@ def cmd_poll(device_auth_id: str, user_code: str, interval: str) -> int:
     # than crashing the detached poller. Nothing was stored — no partial write —
     # and the detail names no token material (only the guard's fixed message).
     try:
+        write_status("connecting", provider="chatgpt")
         store_chatgpt_tokens(tokens)
     except RuntimeError:
         write_status("error", provider="chatgpt",
                      detail="could not store credential securely; try again")
         return 1
-    _finalize_connected("chatgpt")
-    write_status("connected", provider="chatgpt")
-    return 0
+    return 0 if _finalize_connected("chatgpt") else 1
 
 
-def _finalize_connected(provider: str) -> None:
+def _finalize_connected(provider: str) -> bool:
     """Run the conversion pipeline — in the shim's process when possible.
 
     This poller inherits the GATEWAY's scrubbed tool environment, which lacks
@@ -234,7 +223,8 @@ def _finalize_connected(provider: str) -> None:
     — only the celebration degrades, and it leaves its breadcrumb.
     """
     if not squire_connect.delegate_connected_pipeline(provider):
-        squire_connect.run_connected_pipeline(provider)
+        return squire_connect.run_connected_pipeline(provider)
+    return True
 
 
 def cmd_refresh_openai_device() -> int:

@@ -41,7 +41,7 @@ FORBIDDEN_COLUMN_SUBSTRINGS = [
 # counters and gauges -- and note that the fleet metrics are named `updates_*`, not
 # `messages_*`, both because Telegram calls them updates and because the forbidden
 # substring below must keep meaning what it says.
-ALLOWED_TABLES = {"tenant", "bot", "provisionjob", "heartbeat", "waitlist"}
+ALLOWED_TABLES = {"tenant", "bot", "provisionjob", "heartbeat", "waitlist"} | {"pilotaccount", "pilotauthchallenge", "pilotsession", "pilotinvitation", "pilotcapacity", "pilotadmission", "pilotruntime", "pilotentitlement", "pilotturn", "pilotoperation", "pilotratebucket", "pilotschemarevision", "pilotextension"}
 
 
 def test_only_expected_tables_exist():
@@ -186,6 +186,25 @@ EXPECTED_COLUMNS = {
         "updated_at",
     },
 }
+
+
+# Pilot additions contain bounded signup profile fields, hashed login/session
+# capabilities, opaque routing IDs, counters and workflow metadata only.
+EXPECTED_COLUMNS.update({
+    "pilotaccount": set("id email tenant_id display_name timezone state consent_version consent_at created_at".split()),
+    "pilotauthchallenge": set("id email digest expires_at attempts consumed created_at".split()),
+    "pilotsession": set("digest account_id csrf_digest expires_at revoked created_at".split()),
+    "pilotinvitation": set("id digest email expires_at account_id state created_at".split()),
+    "pilotcapacity": {"id", "revision"},
+    "pilotadmission": set("account_id invitation_id state reserved_until accepted_at created_at".split()),
+    "pilotruntime": set("id owner_tenant_id scope_id kind generation ready registered model_ready deployment_generation scope_generation state last_seen_at created_at".split()),
+    "pilotentitlement": set("tenant_id state activated_at expires_at daily_index daily_turns lifetime_turns revision model_budget_cents extension_requested created_at".split()),
+    "pilotturn": set("id tenant_id runtime_id admitted_at".split()),
+    "pilotoperation": set("id account_id kind reference state attempts next_attempt_at lease_until lease_generation last_code created_at".split()),
+    "pilotratebucket": {"id", "hits", "expires_at"},
+    "pilotschemarevision": {"id", "applied_at"},
+    "pilotextension": set("id tenant_id operator_label reason_code previous_expires_at expires_at previous_budget_cents budget_cents state created_at applied_at".split()),
+})
 
 
 @pytest.mark.parametrize("table", sorted(ALLOWED_TABLES))

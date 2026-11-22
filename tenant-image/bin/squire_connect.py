@@ -44,6 +44,24 @@ def _nonce_dir(state_dir: str | None) -> str:
     return os.path.join(state_dir or _default_state_dir(), "connect-nonces")
 
 
+def connection_status(hermes_home=None):
+    path = os.path.join(os.environ.get("SQUIRE_STATE_DIR") or os.path.join(hermes_home or os.environ.get("HERMES_HOME") or "/opt/data", ".squire"), "llm-connect-status.json")
+    try:
+        value = json.loads(open(path, "rb").read())
+        return value if isinstance(value, dict) else {"state": "error"}
+    except FileNotFoundError:
+        return {"state": "none"}
+    except (OSError, ValueError):
+        return {"state": "error"}
+
+
+def write_connection_status(state, hermes_home=None, **extra):
+    path = os.path.join(os.environ.get("SQUIRE_STATE_DIR") or os.path.join(hermes_home or os.environ.get("HERMES_HOME") or "/opt/data", ".squire"), "llm-connect-status.json")
+    if state == "connecting":
+        extra.setdefault("detail", "Finishing the provider switch. If interrupted, request a fresh connection attempt; no success has been confirmed.")
+    _atomic_write_0600(path, json.dumps({"state": state, "updated": time.time(), **extra}).encode())
+
+
 def _atomic_write_0600(path: str, data: bytes) -> None:
     """Same discipline as squire_autopair: same-dir temp, 0600 from creation,
     fsync, atomic replace, no partial file left on any failure path."""
@@ -227,10 +245,10 @@ def render_done_page(provider: str) -> str:
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>Connected</title>
 <style>{_PAGE_STYLE}</style></head><body>
-<h1>Done — {label} is connected 🎉</h1>
+<h1>Your {label} key is saved</h1>
 <p>Your key was verified and stored, encrypted, on your agent's own volume.</p>
-<p><strong>Head back to Telegram</strong> — your agent will confirm there in a
-moment.</p>
+<p><strong>Head back to your private chat</strong> — your agent will confirm
+when the connection is ready. Saving a key does not change your service limits.</p>
 </body></html>"""
 
 
@@ -403,6 +421,9 @@ def store_api_key(provider: str, key: str, hermes_home: str | None = None) -> No
     our proxy.
     """
     home = hermes_home or os.environ.get("HERMES_HOME") or "/opt/data"
+    if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+        raise RuntimeError("private providers are not available in groups")
+    write_connection_status("connecting", home, provider=provider)
     env_path = os.path.join(home, ".env")
     if provider == "anthropic":
         env_upsert(env_path, {
@@ -419,9 +440,8 @@ def store_api_key(provider: str, key: str, hermes_home: str | None = None) -> No
 # Connected pipeline (shared by the /connect page and the device-flow CLI):
 #   store credential (caller already did) -> switch the gateway model ->
 #   restart the gateway -> tell control-api so the trial key is revoked.
-# Every step is independently non-fatal: a stored credential with a failed
-# notify is reconciled by the heartbeat backstop; failing the whole pipeline
-# would leave the USER's success page lying.
+# Failed switching/restart never reports success. Once connected is durable,
+# a missed control callback is reconciled by the heartbeat.
 # ---------------------------------------------------------------------------
 import re
 import subprocess
@@ -434,7 +454,7 @@ CHATGPT_HERMES_PROVIDER = "openai-codex"
 def _gateway_model_for(provider: str) -> str:
     """Env-overridable so a model rename never needs an image rebuild.
 
-    anthropic keeps the trial's model id — same model, now direct + unmetered.
+    anthropic keeps the model family, now billed directly to the owner.
     chatgpt is a BARE SLUG, not a `provider:model` string: it goes into the
     `default:` key of the model mapping below, with the provider named
     separately. Valid slugs for a ChatGPT account today are gpt-5.4, gpt-5.5,
@@ -458,7 +478,8 @@ def _gateway_model_for(provider: str) -> str:
 def _model_yaml_block(provider: str) -> str:
     """The replacement for config.yaml's `model:` entry.
 
-    ChatGPT subscriptions need a MAPPING, not a scalar. Live 2026-08-16: we
+    All providers need an explicit mapping; scalar names can fall through to
+    auto-detection and select an inherited trial credential. Live 2026-08-16: we
     wrote `model: "openai:gpt-5-codex"`, which hermes does not resolve to its
     openai-codex provider at all — it fell through to OpenRouter and every
     message came back "Missing Authentication header". Verified against a
@@ -473,7 +494,8 @@ def _model_yaml_block(provider: str) -> str:
         return ('model:\n'
                 f'  provider: "{CHATGPT_HERMES_PROVIDER}"\n'
                 f'  default: "{_gateway_model_for(provider)}"')
-    return f'model: "{_gateway_model_for(provider)}"'
+    model = _gateway_model_for(provider).removeprefix(provider + ":")
+    return f'model:\n  provider: "{provider}"\n  default: "{model}"'
 
 
 #: The `model:` entry INCLUDING any indented mapping lines under it. Matching
@@ -495,7 +517,9 @@ def switch_gateway_model(provider: str, hermes_home: str | None = None) -> bool:
         text = open(config_path, "r", encoding="utf-8").read()
         # A lambda replacement, not a string: a literal would let a backslash or
         # a \g in a model slug be read as a group reference.
-        new_text = _MODEL_ENTRY_RE.sub(lambda _m: block, text, count=1)
+        new_text, matched = _MODEL_ENTRY_RE.subn(lambda _m: block, text, count=1)
+        if matched != 1:
+            return False
         if new_text != text:
             _atomic_write_0600(os.path.realpath(config_path), new_text.encode("utf-8"))
         return True
@@ -524,6 +548,13 @@ def notify_control_api(provider: str) -> bool:
     bearer. Provider NAME only — never credential material. Non-fatal: the
     heartbeat's llm_connected marker is the reconciliation backstop."""
     base = (os.environ.get("CONTROL_API_URL") or "").rstrip("/")
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        # Provider connection never changes product entitlement. The scoped
+        # callback revokes the old trial key and records only provider name.
+        request=urllib.request.Request(base+"/v1/runtime/"+os.environ["SQUIRE_RUNTIME_ID"]+"/provider",method="POST",data=json.dumps({"provider":provider}).encode(),headers={"Content-Type":"application/json","Authorization":"Bearer "+os.environ.get("SQUIRE_CONTROL_TOKEN","")})
+        try:
+            with urllib.request.build_opener(_NoRedirect()).open(request,timeout=20) as response:return 200<=response.status<300
+        except (OSError,urllib.error.URLError):return False
     token = os.environ.get("INTERNAL_API_TOKEN") or ""
     tenant_id = os.environ.get("TENANT_ID") or ""
     if not (base and token and tenant_id):
@@ -586,6 +617,9 @@ def _celebration_text(provider: str) -> str:
     conversion moment, not an ops notice.
     """
     label = _PROVIDER_LABELS.get(provider, provider)
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        return (f"{label} is connected. Your agent now uses your own account, and its credentials stay encrypted in your private runtime. "
+                "Your Squire service access and daily limits stay the same; approved groups keep their separate model allowance.")
     return (
         f"**{label} is connected.** 🎉\n"
         "\n"
@@ -606,6 +640,8 @@ def _resolve_owner_chat_id(hermes_home: str | None) -> str | None:
     but this must be safe rather than raise). For a Telegram DM the chat_id is
     the owner's user id, which is exactly the KEY autopair stores the record
     under — so the store's single key is the chat_id."""
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        return os.environ.get("SQUIRE_CONVERSATION_ID") if os.environ.get("SQUIRE_RUNTIME_KIND")=="dm" else None
     home = hermes_home or os.environ.get("HERMES_HOME") or "/opt/data"
     try:
         import squire_autopair  # bin/ is on sys.path via the shim/CLI importer
@@ -787,9 +823,9 @@ def notify_owner_connected(provider: str, hermes_home: str | None = None) -> boo
     hermes_bin = os.environ.get("SQUIRE_HERMES_BIN") or _hermes_binary()
     try:
         result = subprocess.run(
-            [hermes_bin, "send", "--to", f"telegram:{chat_id}", text],
+            [hermes_bin, "send", "--to", f"{'squire' if os.environ.get('SQUIRE_RUNTIME_ID') else 'telegram'}:{chat_id}", text],
             capture_output=True, timeout=30, check=False,
-            env=_send_env(hermes_home),
+            env={**_send_env(hermes_home), "SQUIRE_OUTBOUND_OPERATION_ID": f"provider-connected:{provider}"},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _record_celebration_failure(hermes_home, f"{type(exc).__name__}: {exc}")
@@ -846,32 +882,22 @@ def delegate_connected_pipeline(provider: str, port: int | None = None,
         return False
 
 
-def run_connected_pipeline(provider: str, hermes_home: str | None = None) -> None:
-    """The conversion moment. Order matters, and two constraints fix it:
-
-      1. the model must point at the new provider BEFORE the gateway restarts
-         (or it boots back onto the trial model), and
-      2. the trial key is revoked only AFTER the tenant can serve without it —
-         so notify_control_api stays behind restart_gateway.
-
-    notify_owner_connected goes SECOND, ahead of the restart, and is non-fatal:
-    the proactive DM is a nicety on top of an already-complete conversion, and a
-    failed send must not fail the pipeline (a stored credential with a missed
-    celebration is still a connected tenant).
-
-    WHY SECOND, not last. `hermes send` needs no running gateway for a bot-token
-    platform like Telegram — it uses the bot token directly. Sending it after
-    restart_gateway() therefore bought nothing and cost ~45s of dead air:
-    supervisorctl does not return until the new gateway clears startsecs=45, so
-    the owner sat watching an idle chat for the most important 45 seconds of the
-    product. Worse, it made the celebration hostage to gateway health — when the
-    gateway went FATAL live on 2026-08-19 the message could never be sent at
-    all. Sending first makes it land in ~2s and survive a restart that fails.
-
-    The restart still happens right behind it, and the shim answers 503 while it
-    runs, which ingress retries — so a reply typed into that window is delayed,
-    never dropped."""
-    switch_gateway_model(provider, hermes_home)
+def run_connected_pipeline(provider: str, hermes_home: str | None = None) -> bool:
+    """Revoke trial funding only after the restarted gateway proves its owner route."""
+    if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":return False
+    write_connection_status("connecting", hermes_home, provider=provider)
+    if not switch_gateway_model(provider, hermes_home) or not restart_gateway():
+        write_connection_status("error", hermes_home, provider=provider, detail="Provider switch did not complete; retry connection.")
+        return False
+    if os.environ.get("SQUIRE_RUNTIME_ID"):
+        from squire_overlay.config import RuntimeConfig
+        from squire_overlay.store import Store
+        scope=RuntimeConfig.from_env()
+        status=Store(scope.database).status(scope.generation)
+        if status.get("owner_provider") != provider:
+            write_connection_status("error", hermes_home, provider=provider, detail="Gateway has not confirmed the selected private provider.")
+            return False
+    write_connection_status("connected", hermes_home, provider=provider)
+    notify_control_api(provider)  # A missed callback is retried by the heartbeat.
     notify_owner_connected(provider, hermes_home)
-    restart_gateway()
-    notify_control_api(provider)
+    return True

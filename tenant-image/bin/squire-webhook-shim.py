@@ -188,6 +188,7 @@ _COUNTERS = {
     "updates_rejected": 0,  # refused before delivery (bad auth, malformed request)
 }
 _COUNTERS_LOCK = threading.Lock()
+_CONNECT_SUBMIT_LOCK = threading.Lock()
 
 
 def count(name: str) -> None:
@@ -399,11 +400,14 @@ class Handler(BaseHTTPRequestHandler):
         and the public-domain Host gate in do_POST has already rejected
         public traffic before we get here.
         """
+        if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+            self._respond(403, {"error": "private providers are unavailable in groups"})
+            return
         if squire_connect is None:
             self._respond(404, {"error": "not found"})
             return
         peer = (self.client_address or ("",))[0]
-        if peer not in ("127.0.0.1", "::1"):
+        if not _is_loopback(self.client_address):
             log("rejected non-loopback /internal/llm-connected")
             self._respond(403, {"error": "forbidden"})
             return
@@ -439,6 +443,9 @@ class Handler(BaseHTTPRequestHandler):
         """POST /connect/<nonce>: validate the pasted key with the provider,
         store it, consume the nonce, kick the connected pipeline. An invalid
         key is stated plainly, stores nothing, and leaves the nonce live."""
+        if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+            self._respond(403, {"error": "private providers are unavailable in groups"})
+            return
         if squire_connect is None:
             self._respond(404, {"error": "not found"})
             return
@@ -467,6 +474,12 @@ class Handler(BaseHTTPRequestHandler):
         api_key = (form.get("api_key") or [""])[0].strip()
 
         candidate = path[len("/connect/"):]
+        # Parse the bounded body before locking; a slow upload cannot own the lock.
+        with _CONNECT_SUBMIT_LOCK:
+            self._submit_connect(candidate, provider, api_key, ip)
+
+    def _submit_connect(self, candidate, provider, api_key, ip):
+        # One shim process owns nonce check, credential write, and consumption.
         if squire_connect.find_nonce(None, candidate) is None:
             _connect_record_failure(ip)
             self._respond_html(200, squire_connect.render_invalid_page())
@@ -573,6 +586,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - stdlib naming
         path = self.path.split("?", 1)[0]
+
+        if os.environ.get("SQUIRE_RUNTIME_ID") and path.startswith("/events"):
+            from squire_overlay.http import handle
+            if handle(self,path): return
 
         # Public-domain gate (see do_GET). A forged Telegram update arriving
         # via the public domain — even with a stolen delivery secret — is the
@@ -818,7 +835,12 @@ def main() -> int:
         # this only fires if the shim is run standalone.
         log("warning: TELEGRAM_WEBHOOK_SECRET is empty — forwarded requests will be unsigned")
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    class DualStackServer(ThreadingHTTPServer):
+        address_family = socket.AF_INET6
+        def server_bind(self):
+            self.socket.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)
+            super().server_bind()
+    server = DualStackServer(("::", PORT), Handler)
     server.daemon_threads = True
     log(
         f"listening on 0.0.0.0:{PORT}{WEBHOOK_PATH} -> "

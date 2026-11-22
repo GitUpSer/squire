@@ -248,6 +248,13 @@ class RailwayClient:
             raise RailwayError(f"serviceDomainCreate returned no domain: {data}")
         return domain
 
+    def _registry_credentials(self) -> dict[str, str] | None:
+        settings = get_settings()
+        username, password = settings.tenant_registry_username, settings.tenant_registry_password
+        if bool(username) != bool(password):
+            raise RailwayError("both tenant registry username and password are required")
+        return {"username": username, "password": password} if username else None
+
     def create_service(
         self,
         name: str,
@@ -273,7 +280,15 @@ class RailwayClient:
         }
         if variables:
             payload["variables"] = variables
-        data = self._gql(mutation, {"input": payload})
+        credentials = self._registry_credentials()
+        if credentials:
+            payload["registryCredentials"] = credentials
+        try:
+            data = self._gql(mutation, {"input": payload})
+        except RailwayError:
+            if credentials:
+                raise RailwayError("private image service creation failed") from None
+            raise
         service_id = (data.get("serviceCreate") or {}).get("id")
         if not service_id:
             raise RailwayError(f"serviceCreate returned no id: {data}")
@@ -530,18 +545,27 @@ class RailwayClient:
             payload["region"] = region
         if num_replicas is not None:
             payload["numReplicas"] = num_replicas
+        credentials = None
         if image is not None:
             payload["source"] = {"image": image}
+            credentials = self._registry_credentials()
+            if credentials:
+                payload["registryCredentials"] = credentials
         if not payload:
             return
-        self._gql(
-            mutation,
-            {
-                "serviceId": service_id,
-                "environmentId": self.environment_id,
-                "input": payload,
-            },
-        )
+        try:
+            self._gql(
+                mutation,
+                {
+                    "serviceId": service_id,
+                    "environmentId": self.environment_id,
+                    "input": payload,
+                },
+            )
+        except RailwayError:
+            if credentials:
+                raise RailwayError("private image configuration failed") from None
+            raise
 
     # -- deployments -------------------------------------------------------
 
@@ -618,3 +642,59 @@ class RailwayClient:
                 return False
             raise
         return True
+
+    def find_bucket_by_name(self, name: str) -> str | None:
+        """Project-scoped bucket identity, with pagination and no secret reads."""
+        query = """
+        query pilotBuckets($id: String!, $after: String) {
+          project(id: $id) {
+            buckets(first: 100, after: $after) {
+              edges { node { id name deletedAt } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+        """
+        cursor = None
+        for _ in range(100):
+            data = self._gql(query, {"id": self.project_id, "after": cursor})
+            page = (data.get("project") or {}).get("buckets") or {}
+            for edge in page.get("edges", []):
+                node = edge.get("node") or {}
+                if node.get("name") == name and not node.get("deletedAt"):
+                    return node["id"]
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                return None
+            following = info.get("endCursor")
+            if not following or following == cursor:
+                raise RailwayError("bucket pagination did not advance")
+            cursor = following
+        raise RailwayError("bucket pagination exceeded safety bound")
+
+    def ensure_runtime_bucket(self, runtime_id: str) -> str:
+        """One backup bucket/capability per runtime; never shared tenant credentials.
+
+        Schema and variable-reference names verified live 2026-11-15. Railway's
+        bucket environmentId is currently unimplemented; bucket names are project
+        identities, so provisioning intentionally omits that misleading field.
+        """
+        name = "backup-" + runtime_id
+        existing = self.find_bucket_by_name(name)
+        if existing:
+            return name
+        mutation = """
+        mutation pilotBucketCreate($input: BucketCreateInput!) {
+          bucketCreate(input: $input) { id name }
+        }
+        """
+        try:
+            data = self._gql(mutation, {"input": {"projectId": self.project_id, "name": name}})
+            result = data.get("bucketCreate") or {}
+            if not result.get("id") or result.get("name") != name:
+                raise RailwayError("runtime backup bucket was not confirmed")
+        except RailwayError:
+            # A timed-out mutation may have committed. Adopt, never blindly retry.
+            if not self.find_bucket_by_name(name):
+                raise
+        return name

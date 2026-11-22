@@ -32,14 +32,13 @@
 # PINNING / BUMPING
 # -----------------
 # The base is pinned BY DIGEST, not by tag. A tag is a mutable pointer: upstream
-# re-tagging v2026.8.3 would silently change what every tenant runs, and the
+# re-tagging the upstream release would silently change what every tenant runs, and the
 # patch overlay below would be applying to a tree we never verified. The digest
 # makes the base immutable and the build reproducible.
 #
-# Digest below == docker.io/nousresearch/hermes-agent:v2026.8.3 (linux/amd64),
-# resolved 2026-08-07. That is the current upstream release, and the same tag
-# docs/reference/hermes-update-plan-v2026.8.3.md rehearsed and executed against,
-# so the patch overlay and marker greps are known-good on it.
+# Digest below == docker.io/nousresearch/hermes-agent:v2026.9.24 (linux/amd64),
+# verified 2026-11-15 against source f97608f178d1ffeca59860195ab7da295f7c8e5f.
+# This is the pilot image only; the existing fleet stays on its deployed digest.
 #
 # NOTE: pinning a per-arch digest makes this image amd64-only. That is what
 # Railway runs, and a tenant image is not something anyone builds on a laptop.
@@ -50,7 +49,7 @@
 # re-run the patch overlay and re-verify the markers. Never bump without the
 # canary drill in the update plan (§7 verification gates).
 #
-FROM docker.io/nousresearch/hermes-agent@sha256:c0cab4e3711bcb27a312be1b3776254fc06fd50d5f7a6b8017915fc7171cb39e
+FROM docker.io/nousresearch/hermes-agent@sha256:2fd023efbb8d3d2b0ce1a73d028b07370cff34f567cfe0e999553e8c327ea283
 
 # Human-readable provenance for the tag the digest above corresponds to.
 # Metadata only — changing it does not change what is built, which is exactly why
@@ -67,12 +66,11 @@ FROM docker.io/nousresearch/hermes-agent@sha256:c0cab4e3711bcb27a312be1b3776254f
 #
 # The CI job asserts instead on the property that matters — that the FROM line
 # is digest-pinned at all.
-ARG HERMES_VERSION=v2026.8.3
+ARG HERMES_VERSION=v2026.9.24
 
 # Pinned exactly, matching the digest-pin discipline above: a floating range is
 # the same mutable-input problem in a different coat. Every version below was
 # resolved against the real index on 2026-08-08; bump deliberately.
-ARG HINDSIGHT_VERSION=0.9.0
 # `+cpu` is the local version the PyTorch CPU index uses for its Linux wheels.
 ARG TORCH_VERSION=2.9.1+cpu
 ARG SUPERVISOR_VERSION=4.3.0
@@ -100,7 +98,7 @@ ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a2515158
 # hindsight's own embedded-mode guard.
 USER root
 
-LABEL org.opencontainers.image.title="squire-hermes-tenant" \
+LABEL org.opencontainers.image.title="squire-hermes-tenant-pilot" \
       org.opencontainers.image.description="Squire per-tenant agent runtime: hermes-agent + Hindsight + embedded Postgres" \
       ai.squire.hermes.version="${HERMES_VERSION}"
 
@@ -205,7 +203,7 @@ RUN uv venv --no-config --python 3.13 /opt/squire/venv \
 # (plugins/memory/hindsight/__init__.py: `if self._mode == "local_embedded":
 # import hindsight_embed.daemon_embed_manager`). We run local_external against a
 # daemon supervised by supervisord, so the gateway reaches Hindsight over HTTP
-# via hindsight-client (already baked into the upstream image) and never imports
+# via an explicitly pinned hindsight-client in the Hermes interpreter and never imports
 # the manager at all.
 #
 # torch is installed FIRST from PyTorch's CPU-only index. The default PyPI torch
@@ -226,16 +224,49 @@ RUN uv venv --no-config --python 3.13 /opt/squire/venv \
 # local-onnx (added for Gate G1, 2026-08-19): onnxruntime + tokenizers, ~50MB
 # and NO torch dependency. Makes HINDSIGHT_API_EMBEDDINGS_PROVIDER=onnx a
 # viable low-RAM embedder (default model intfloat/multilingual-e5-small,
-# 384-dim — same dimension as local's bge-small, so existing vector tables
-# survive the switch). Keyless and in-container, unlike the openai provider;
+# 384-dim). Equal dimension does NOT make vectors from different models
+# comparable: switching models requires explicit re-embedding. The founder
+# remains on its original BGE model. Keyless and in-container;
 # kept alongside local-ml so `local` remains the image default until a
 # fleet-wide embedder decision is made.
 RUN uv venv --no-config --python 3.13 /opt/squire/hindsight-venv \
  && uv pip install --no-config --python /opt/squire/hindsight-venv/bin/python --no-cache \
-        --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}" \
+        --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+
+# The founder's schema is the 0.5.2 head. Upgrading it to 0.9.0 removes
+# observations; preserve it in a separate immutable image, never a fleet default.
+ARG HINDSIGHT_VARIANT=standard
+ENV SQUIRE_HINDSIGHT_VARIANT=${HINDSIGHT_VARIANT}
+# 0.5.2 omitted SQLAlchemy's <2.1 ceiling (present in 0.9.0). Both daemons
+# declare psycopg2; 2.1 changes the plain postgresql:// default to psycopg3.
+# Keep the tested 2.0 driver contract instead of changing migration drivers.
+RUN case "$HINDSIGHT_VARIANT" in \
+      standard) memory_version=0.9.0; memory_extras=embedded-db,local-ml,local-onnx; pg_version=0.15.1 ;; \
+      founder) memory_version=0.5.2; memory_extras=embedded-db,local-ml; pg_version=0.12.3 ;; \
+      *) echo 'Unknown Hindsight image variant' >&2; exit 1 ;; \
+    esac \
  && uv pip install --no-config --python /opt/squire/hindsight-venv/bin/python --no-cache \
-        "hindsight-api-slim[embedded-db,local-ml,local-onnx]==${HINDSIGHT_VERSION}" \
+        "hindsight-api-slim[${memory_extras}]==${memory_version}" "pg0-embedded==${pg_version}" \
+        'sqlalchemy==2.0.52' \
  && /opt/squire/hindsight-venv/bin/hindsight-api --help > /dev/null
+
+# Hermes 9.24 moved Hindsight to its external plugin catalog. Its base image
+# no longer includes the HTTP client. Match the founder's installed client.
+RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
+        'hindsight-client==0.10.3'
+
+# Voice notes use the same local/base model as the founder, with no paid STT key.
+# Export the pinned upstream lock so adding its optional decoder cannot drift dependencies.
+RUN uv export --frozen --directory /opt/hermes --extra voice --no-dev --no-emit-project \
+        --no-hashes --format requirements-txt --output-file /tmp/stt-constraints.txt > /dev/null \
+ && uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-cache \
+        --constraint /tmp/stt-constraints.txt 'faster-whisper==1.2.1' \
+ && rm /tmp/stt-constraints.txt \
+ && /opt/hermes/.venv/bin/python -c 'from huggingface_hub import snapshot_download; snapshot_download("Systran/faster-whisper-base", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66", local_dir="/opt/squire/stt/base", allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"])' \
+ && rm -rf /opt/squire/stt/base/.cache \
+ && chmod -R a+rX,a-w /opt/squire/stt
+COPY stt/smoke.py /opt/squire/stt-build/smoke.py
+RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/stt-build/smoke.py
 
 # ---------------------------------------------------------------------------
 # 2b. restic (nightly volume backups)
@@ -310,19 +341,75 @@ RUN /usr/local/bin/restic version
 # script now checks for the binary explicitly (see its header), but the real fix
 # is to install it.
 #
-# Why patch(1) and not `git apply`, which IS present: our patches were generated
-# against a June tree and land on v2026.8.3 with large line offsets (001 +549,
-# 002 +2087, 003 +1620). Offset tolerance is exactly what patch(1) is for.
-# git apply is stricter about context location and would turn a survivable
-# offset into a build failure on the next upstream bump.
+# The active patches are regenerated against the exact v2026.9.24 source.
+# compatibility.py applies them to an independent pristine source copy and
+# executes behavior from the resulting functions before the image can publish.
 RUN apt-get -o Acquire::Retries=3 update \
  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends patch \
  && rm -rf /var/lib/apt/lists/*
 
+# Founder 0.5.2 predates CODEX_HOME support; read the existing access-only tmpfs
+# export, leaving the owner's separate Codex CLI refresh credentials untouched.
+COPY hindsight/001-founder-codex-home.patch hindsight/codex_auth_smoke.py /opt/squire/hindsight-build/
+COPY patches/apply-patches.sh /opt/squire/hindsight-build/apply-patches.sh
+RUN if [ "$HINDSIGHT_VARIANT" = founder ]; then \
+      memory_site=$(/opt/squire/hindsight-venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))'); \
+      bash /opt/squire/hindsight-build/apply-patches.sh "$memory_site"; \
+    fi \
+ && runuser -u hermes -- /opt/squire/hindsight-venv/bin/python /opt/squire/hindsight-build/codex_auth_smoke.py
+
+COPY hindsight/smoke.py /opt/squire/hindsight-build/smoke.py
+COPY bin/squire-pg0-prestart.py /opt/squire/bin/squire-pg0-prestart.py
+RUN runuser -u hermes -- /opt/hermes/.venv/bin/python /opt/squire/hindsight-build/smoke.py
+
 COPY patches/ /opt/squire/patches/
 RUN chmod 0755 /opt/squire/patches/*.sh \
  && /opt/squire/patches/apply-patches.sh /opt/hermes \
- && /opt/squire/patches/verify-markers.sh /opt/hermes
+ && /opt/squire/patches/verify-markers.sh /opt/hermes \
+ && /opt/squire/venv/bin/python /opt/squire/patches/compatibility.py /opt/hermes --applied
+
+# The installed plugin and root-owned managed configuration ship with the image.
+# They are never replaced by tenant-owned config on the persistent volume.
+COPY overlay/ /opt/squire/overlay/
+COPY overlay/managed/config.yaml /etc/hermes/config.yaml
+RUN uv pip install --no-config --python /opt/hermes/.venv/bin/python --no-deps /opt/squire/overlay/plugin \
+ && uv pip install --no-config --python /opt/squire/venv/bin/python --no-deps /opt/squire/overlay/plugin \
+ && chmod 0644 /etc/hermes/config.yaml \
+ && /opt/hermes/.venv/bin/python /opt/squire/overlay/gate/contract.py
+
+# Founder browser parity: exact source Camofox package + dependency lock + browser.
+# Browser cookies are NOT baked in. The supervised private-runtime process uses
+# tmpfs state with an encrypted volume checkpoint; group runtimes never start it.
+COPY browser/package.json browser/package-lock.json browser/harden.py browser/smoke.py /opt/squire/browser-build/
+RUN test "$(dpkg --print-architecture)" = amd64 \
+ && node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' \
+ && apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+      libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 \
+      libegl1 libgl1-mesa-dri libgbm1 xvfb unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /opt/squire/camofox /opt/squire/camoufox \
+ && curl --fail --location --retry 3 https://registry.npmjs.org/@askjo/camofox-browser/-/camofox-browser-1.11.2.tgz -o /tmp/camofox.tgz \
+ && echo 'f892430edfa42acd0186d082b2930dcbcad3ccc01064b55af8bf47b836e99387  /tmp/camofox.tgz' | sha256sum --check - \
+ && tar -xzf /tmp/camofox.tgz --strip-components=1 -C /opt/squire/camofox \
+ && cp /opt/squire/browser-build/package-lock.json /opt/squire/camofox/package-lock.json \
+ && cd /opt/squire/camofox \
+ && npm ci --omit=dev --ignore-scripts \
+ && npm rebuild better-sqlite3 \
+ && /opt/squire/venv/bin/python /opt/squire/browser-build/harden.py /opt/squire/camofox \
+ && curl --fail --location --retry 3 https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.x86_64.zip -o /tmp/camoufox.zip \
+ && echo '61e1ec455e021720af38a5cc5ff7566121363cb5b82b72f24e381ba2676a4888  /tmp/camoufox.zip' | sha256sum --check - \
+ && (unzip -q /tmp/camoufox.zip -d /opt/squire/camoufox; status=$?; test "$status" -le 1) \
+ && test -f /opt/squire/camoufox/camoufox-bin \
+ && test -f /opt/squire/camoufox/properties.json \
+ && test -f /opt/squire/camoufox/fontconfigs/linux/fonts.conf \
+ && ln -s fontconfigs /opt/squire/camoufox/fontconfig \
+ && printf '%s\n' '{"version":"135.0.1","release":"beta.24"}' > /opt/squire/camoufox/version.json \
+ && chmod -R a+rX /opt/squire/camofox /opt/squire/camoufox \
+ && chmod 0755 /opt/squire/camoufox/camoufox /opt/squire/camoufox/camoufox-bin \
+ && rm /tmp/camofox.tgz /tmp/camoufox.zip
+ENV CAMOUFOX_EXECUTABLE=/opt/squire/camoufox/camoufox-bin
+RUN runuser -u hermes -- /opt/squire/venv/bin/python /opt/squire/browser-build/smoke.py
 
 # ---------------------------------------------------------------------------
 # 4. Squire runtime files
@@ -370,12 +457,26 @@ COPY supervisord.conf /opt/squire/supervisord.conf
 #   4. In the gateway logs, confirm NO line about starting an embedded daemon
 #      and no "hindsight-embed" activity — that would mean local_embedded.
 COPY home-template/ /opt/squire/home-template/
+# Exact catalog entry from Hermes 9.24. Reviewed founder adoption explicitly
+# preserves restored files; normal first boot seeds this public plugin.
+RUN mkdir -p /opt/squire/home-template/plugins/hindsight \
+ && curl --fail --location --retry 3 \
+      https://codeload.github.com/vectorize-io/hindsight/tar.gz/176f8c2de1369f569c489b831d143b78128b5535 \
+      -o /tmp/hindsight-plugin.tgz \
+ && echo '3f7ea75f19ce0d3770019b3f748e3d7f026ccfedd82a9d754c695dda3905e67d  /tmp/hindsight-plugin.tgz' | sha256sum --check - \
+ && tar -xzf /tmp/hindsight-plugin.tgz --strip-components=3 \
+      -C /opt/squire/home-template/plugins/hindsight \
+      hindsight-176f8c2de1369f569c489b831d143b78128b5535/hindsight-integrations/hermes \
+ && test -f /opt/squire/home-template/plugins/hindsight/plugin.yaml \
+ && rm /tmp/hindsight-plugin.tgz
 
 # Byte-compile our Python so a syntax error fails the BUILD, not a tenant boot.
 RUN /opt/squire/venv/bin/python -m py_compile \
         /opt/squire/bin/squire_secrets.py \
+        /opt/squire/bin/squire-restored-home.py \
         /opt/squire/bin/squire-webhook-shim.py \
         /opt/squire/bin/squire-hindsight-healthcheck.py \
+        /opt/squire/bin/squire-pg0-prestart.py \
         /opt/squire/bin/squire-heartbeat.py \
         /opt/squire/bin/squire-concierge-hook.py \
         /opt/squire/bin/squire_connect.py \

@@ -28,7 +28,7 @@ from control_api import crypto
 from control_api.clients.railway import RailwayClient
 from control_api.clients.telegram import TelegramClient
 from control_api.config import Settings, get_settings
-from control_api.db import session_scope
+from control_api.db import session_scope, get_engine
 from control_api.models import (
     PROVISION_STEP_ORDER,
     Bot,
@@ -112,6 +112,7 @@ def _baseline_secrets() -> set[str]:
         settings.internal_api_token,
         settings.railway_api_token,
         settings.litellm_master_key,
+        settings.tenant_registry_password,
     }
 
 
@@ -494,6 +495,9 @@ def _mint_trial_key(session: Session, tenant: Tenant, clients: ProvisionClients)
 
 
 def _step_create_trial_key(session: Session, tenant: Tenant, clients: ProvisionClients) -> None:
+    from control_api.pilot_models import PilotRuntime
+    if session.get(PilotRuntime, tenant.id):
+        return  # Pilot trial starts on the first customer turn.
     if tenant.trial_key_active and _peek_trial_key(tenant.id):
         return  # already minted, material still in hand
     _mint_trial_key(session, tenant, clients)
@@ -505,6 +509,10 @@ def _step_set_variables(session: Session, tenant: Tenant, clients: ProvisionClie
     This is where the DEK is born and immediately forgotten by the control plane.
     The variable set is an interface contract with the tenant image (Task 0.2).
     """
+    from control_api.pilot_models import PilotRuntime
+    if session.get(PilotRuntime, tenant.id):
+        from control_api.pilot_lifecycle import set_runtime_variables
+        return set_runtime_variables(session, tenant, clients)
     settings = get_settings()
     bot = get_bot(session, tenant.bot_id) if tenant.bot_id else None
     if bot is None:
@@ -697,14 +705,23 @@ def _step_deploy(session: Session, tenant: Tenant, clients: ProvisionClients) ->
     settings = get_settings()
     # Serverless sleep before the first deploy so the very first boot is already
     # sleep-enabled (implementation-plan §2 / Gate G1).
-    clients.railway.configure_service_instance(
-        tenant.railway_service_id, sleep_application=settings.railway_tenant_sleep
-    )
+    from control_api.pilot_models import PilotRuntime,PilotEntitlement
+    runtime=session.get(PilotRuntime,tenant.id)
+    entitlement=session.get(PilotEntitlement,runtime.owner_tenant_id) if runtime else None
+    options={"sleep_application":settings.railway_tenant_sleep}
+    if runtime and runtime.kind=="dm" and entitlement and entitlement.state=="imported_active":
+        if not tenant.image_ref or "@sha256:" not in tenant.image_ref:raise ProvisioningError("founder immutable image missing")
+        options["image"]=tenant.image_ref
+    clients.railway.configure_service_instance(tenant.railway_service_id,**options)
     clients.railway.deploy(tenant.railway_service_id)
     _touch(session, tenant)
 
 
 def _step_set_webhook(session: Session, tenant: Tenant, clients: ProvisionClients) -> None:
+    from control_api.pilot_models import PilotRuntime
+    if session.get(PilotRuntime, tenant.id):
+        from control_api.pilot_lifecycle import register_runtime
+        return register_runtime(session, tenant, clients)
     if tenant.webhook_set:
         return
     bot = get_bot(session, tenant.bot_id) if tenant.bot_id else None
@@ -804,7 +821,28 @@ def reclaim_stale_jobs(session: Session) -> int:
     return int(result.rowcount or 0)
 
 
-def advance_job(
+def advance_job(session: Session, job_id: str, clients: ProvisionClients | None = None, force: bool = False) -> ProvisionJob:
+    # The same sponsor lock serializes provisioning with activation and teardown.
+    # Use a dedicated autocommit connection: Session.commit may return its own
+    # pooled connection, which must never accidentally retain a session lock.
+    from control_api.pilot_models import PilotRuntime
+    job=get_job(session,job_id)
+    if job.status in (JobStatus.DONE,JobStatus.FAILED):return job
+    runtime=session.get(PilotRuntime,job.tenant_id)
+    if runtime is None or get_engine().dialect.name!="postgresql":
+        return _advance_job(session,job_id,clients,force)
+    owner=runtime.owner_tenant_id
+    session.commit()
+    from sqlalchemy import text
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as lock:
+        lock_id="tenant:"+owner
+        acquired=lock.execute(text("SELECT pg_try_advisory_lock(hashtextextended(:id,0))"),{"id":lock_id}).scalar_one()
+        if not acquired:return get_job(session,job_id)
+        try:return _advance_job(session,job_id,clients,force)
+        finally:lock.execute(text("SELECT pg_advisory_unlock(hashtextextended(:id,0))"),{"id":lock_id})
+
+
+def _advance_job(
     session: Session,
     job_id: str,
     clients: ProvisionClients | None = None,
@@ -846,6 +884,14 @@ def advance_job(
 
     try:
         while job.step is not ProvisionStep.DONE:
+            from control_api.pilot_models import PilotRuntime, PilotEntitlement
+            runtime=session.get(PilotRuntime,tenant.id)
+            if runtime:
+                session.refresh(runtime)
+                entitlement=session.get(PilotEntitlement,runtime.owner_tenant_id)
+                if entitlement:session.refresh(entitlement)
+                if not entitlement or entitlement.state not in {"active","activating","ready_unstarted","imported_active"} or runtime.state in {"paused","expired","deleted","revoking"}:
+                    job.status=JobStatus.FAILED;job.last_error="pilot lifecycle no longer permits provisioning";session.add(job);session.commit();return job
             handler = _STEP_HANDLERS[job.step]
             # Secrets that must never reach `last_error` (see `_redact`). Reset per
             # step; handlers add to it as they build credential-bearing payloads.
