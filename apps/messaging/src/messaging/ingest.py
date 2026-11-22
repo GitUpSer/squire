@@ -24,6 +24,25 @@ def _event_key(event: Event, binding: Binding | None) -> str:
                   + event.kind + "\0" + event.provider_message_id + "\0" + extra)
 
 
+def _claim_control(db: Session, event: Event, binding: Binding | None) -> bool:
+    """Only a live, scoped claim may bypass work waiting for its runtime."""
+    if event.chat_type != "group" or not re_group_command(event.text.strip()):
+        return False
+    parts = event.text.split()
+    if len(parts) != 3:
+        return False
+    claim = db.exec(select(GroupClaim).where(GroupClaim.nonce_hash == digest("group-claim", parts[2]),
+        GroupClaim.expires_at > now(), GroupClaim.state.in_(["pending", "awaiting_admin"]))).first()
+    if (not claim or (binding and binding.tenant_id != claim.tenant_id)
+        or (claim.group_hash and claim.group_hash != address_hash(event.chat_jid))):
+        return False
+    if parts[1] == "claim":
+        owner = binding_for(db, event.sender_phone_jid or event.sender_jid)
+        return bool(owner and owner.active and owner.kind == "dm" and owner.tenant_id == claim.tenant_id)
+    # Administrator status is checked against fresh provider metadata at dispatch.
+    return claim.state == "awaiting_admin"
+
+
 def _receipt(db: Session, event: Event, binding: Binding | None) -> None:
     if not event.receipt_status or not event.recipient_jid:
         return
@@ -144,6 +163,7 @@ def accept_batch(db: Session, batch: IngestBatch) -> dict:
                         existing.state, existing.completed_at = "expired", now()
                 elif existing.state == "pending":
                     existing.payload_enc = seal(event.model_copy(update={"expires_at": existing.expires_at}).model_dump(), "inbox:" + existing.id)
+                    existing.kind = "group_command" if _claim_control(db, event, binding) else "message"
                 if existing.expires_at is not None:
                     for reply in db.exec(select(Outbox).where(Outbox.cause_event_id == existing.id)):
                         reply.expires_at = min(reply.expires_at, existing.expires_at)
@@ -209,7 +229,8 @@ def accept_batch(db: Session, batch: IngestBatch) -> dict:
                             state, payload, command_tenant = "pending", event.model_dump(), sponsor.tenant_id
             row = InboxEvent(id=eid, logical_key=logical_key, provider_account_id=batch.provider_account_id,
                 provider_message_id=event.provider_message_id, binding_id=binding.id if binding else None,
-                tenant_id=binding.tenant_id if binding else command_tenant, kind=event.kind, state=state,
+                tenant_id=binding.tenant_id if binding else command_tenant,
+                kind="group_command" if state == "pending" and _claim_control(db, event, binding) else event.kind, state=state,
                 payload_enc=seal(payload, "inbox:" + eid) if payload else None, created_at=now(),
                 expires_at=event.expires_at,
                 completed_at=now() if state in {"ignored", "expired", "cancelled"} else None)

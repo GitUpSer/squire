@@ -157,18 +157,17 @@ def test_private_environment_quarantines_transport_and_old_control_capabilities(
     source=tmp_path/"old.env";source.write_text("ANTHROPIC_API_KEY=private-model\nANTHROPIC_TOKEN=old-oauth\nANTHROPIC_BASE_URL=https://old.invalid\nCLAUDE_CODE_OAUTH_TOKEN=old-cli\nWEBHOOK_ENABLED=true\nWEBHOOK_SECRET=old-capability\nWHATSAPP_TOKEN=legacy-transport\nTELEGRAM_BOT_TOKEN=legacy-bot\nINTERNAL_API_TOKEN=old-master\nSQUIRE_RUNTIME_ID=old-scope\nHOME=/home/hermes\nCALENDAR_API_KEY=owner-calendar\nGOOGLE_MAPS_API_KEY=owner-maps\nSENTRY_AUTH_TOKEN=owner-sentry\n")
     output=tmp_path/"prepared/.env"
     result=transform.prepare_private_environment(source,output,checksum(source))
-    assert output.read_text()=="CALENDAR_API_KEY=owner-calendar\nGOOGLE_MAPS_API_KEY=owner-maps\nSENTRY_AUTH_TOKEN=owner-sentry\n"
-    assert result["retained_variables"]==3 and "WHATSAPP_TOKEN" in result["quarantined_variable_names"]
+    assert output.read_text()=="ANTHROPIC_API_KEY=private-model\nANTHROPIC_TOKEN=old-oauth\nANTHROPIC_BASE_URL=https://old.invalid\nCLAUDE_CODE_OAUTH_TOKEN=old-cli\nCALENDAR_API_KEY=owner-calendar\nGOOGLE_MAPS_API_KEY=owner-maps\nSENTRY_AUTH_TOKEN=owner-sentry\n"
+    assert result["retained_variables"]==7 and "WHATSAPP_TOKEN" in result["quarantined_variable_names"]
     assert "private-model" not in json.dumps(result) and "legacy-transport" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("active",["anthropic","openai-codex",None])
-def test_private_auth_removes_anthropic_rotation_but_preserves_owner_oauth(tmp_path,active):
+def test_private_auth_preserves_all_existing_founder_provider_credentials(tmp_path,active):
     original={"version":1,"providers":{"anthropic":{"tokens":{"access_token":"old-anthropic"}},"openai-codex":{"tokens":{"access_token":"owner-access","refresh_token":"owner-refresh"},"auth_mode":"oauth"}},"credential_pool":{"anthropic":[{"source":"env:ANTHROPIC_API_KEY","secret_fingerprint":"sha256:stale"},{"source":"hermes_pkce","access_token":"old-oauth"}],"openai-codex":[{"source":"codex","access_token":"owner-access","refresh_token":"owner-refresh"}]},"active_provider":active,"updated_at":"2026-11-22T00:00:00Z"}
     source=tmp_path/"original.json";source.write_text(json.dumps(original));sha=checksum(source)
     target=tmp_path/"prepared/auth.json";report=transform.prepare_private_auth(source,target,sha)
-    expected=json.loads(json.dumps(original));del expected["providers"]["anthropic"];del expected["credential_pool"]["anthropic"]
-    if active=="anthropic":expected["active_provider"]=None
+    expected=json.loads(json.dumps(original))
     assert json.loads(target.read_text())==expected and checksum(source)==sha
     assert target.stat().st_mode&0o777==0o600
     assert not any(secret in json.dumps(report) for secret in ("owner-access","owner-refresh","old-oauth"))
@@ -183,13 +182,13 @@ def test_private_auth_rejects_unreviewed_schema(tmp_path,value):
     assert not target.exists()
 
 
-def test_private_cron_inherits_funded_runtime_instead_of_legacy_override(tmp_path):
+def test_private_cron_preserves_existing_founder_provider_override(tmp_path):
     original,jobs=source(tmp_path);job=jobs[0]
     job.update(model="claude-opus-4-7",provider="anthropic",base_url="https://old.invalid")
     spec={"id":job["id"],"source_sha256":transform.fingerprint(job)}
     runtime={"kind":"dm","old_chat_jid":job["origin"]["chat_id"],"conversation_id":"owner-conversation"}
     result=transform.translated_job(job,spec,runtime,{job["id"]})
-    assert all(result[key] is None for key in ("model","provider","base_url"))
+    assert all(result[key]==job[key] for key in ("model","provider","base_url"))
     assert result["enabled"] is False and result["prompt"]==job["prompt"]
 
 
@@ -251,11 +250,9 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
     source.write_text(yaml.safe_dump(original));target=tmp_path/"prepared/config.yaml"
     transform.prepare_runtime_config(source,target,checksum(source),"opaque-owner",["calendar"],["/opt/data/skills"])
     config=yaml.safe_load(target.read_text())
-    assert config["model"]=={"default":"claude-sonnet-5","provider":"anthropic"} and set(config["platforms"])=={"squire"}
-    assert config["fallback_providers"]==[] and config["smart_model_routing"]["enabled"] is False
-    expected={"provider":"anthropic","model":"claude-sonnet-5","base_url":"","api_key":"","fallback_chain":[]}
-    assert config["delegation"]=={**expected,"max_iterations":250}
-    assert config["auxiliary"]["compression"]=={**expected,"timeout":120}
+    assert set(config["platforms"])=={"squire"}
+    for key in ("model","fallback_providers","smart_model_routing","delegation","auxiliary"):
+        assert config[key]==original[key]
     assert config["platforms"]["squire"]["home_channel"]=={"platform":"squire","chat_id":"opaque-owner"}
     assert "whatsapp" not in config and config["hooks"]=={}
     assert config["plugins"]["enabled"]==["squire-overlay"]
@@ -264,32 +261,16 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
     with pytest.raises(MigrationError,match="direct_send"):transform.prepare_runtime_config(source,tmp_path/"bad.yaml",checksum(source),"opaque-owner",["old-direct"])
 
 
-def test_prepared_model_resolves_actual_hermes_provider_and_proxy_credentials(tmp_path,monkeypatch):
+def test_prepared_founder_config_keeps_actual_hermes_provider_selection(tmp_path,monkeypatch):
     pytest.importorskip("hermes_cli")
     from hermes_cli import auth,config as hermes_config
     import yaml
-    source=tmp_path/"old.yaml";source.write_text(yaml.safe_dump({"model":{"provider":"openai-codex","default":"owner-model"},"base_url":"https://old.invalid","api_key":"old-key","fallback_model":"owner-model","auxiliary":{"compression":{"provider":"openai-codex","fallback_chain":[{"provider":"openai-codex"}]}},"memory":{}}))
-    target=tmp_path/"prepared.yaml";transform.prepare_runtime_config(source,target,checksum(source),"owner-conversation")
+    original={"model":{"provider":"openai-codex","default":"gpt-6-astra"},"fallback_providers":[{"provider":"anthropic","model":"claude-fable-5-1"}],"auxiliary":{"compression":{"provider":"auto","model":"claude-opus-4-7"}},"delegation":{"provider":"anthropic","model":"claude-fable-5-1"}}
+    source=tmp_path/"old.yaml";source.write_text(yaml.safe_dump(original));target=tmp_path/"prepared.yaml"
+    transform.prepare_runtime_config(source,target,checksum(source),"owner-conversation")
     cfg=hermes_config._normalize_root_model_keys(yaml.safe_load(target.read_text()))
-    assert cfg["model"]=={"default":"claude-sonnet-5","provider":"anthropic"}
-    monkeypatch.setenv("HERMES_HOME",str(tmp_path))
-    monkeypatch.setenv("ANTHROPIC_API_KEY","synthetic-proxy-key")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL","http://trial-proxy.railway.internal:4000")
-    for options in [cfg["model"],cfg["delegation"],cfg["auxiliary"]["compression"]]:
-        provider=auth.resolve_provider(options["provider"])
-        resolved=auth.resolve_api_key_provider_credentials(provider)
-        assert resolved["provider"]=="anthropic" and resolved["api_key"]=="synthetic-proxy-key"
-        assert resolved["base_url"]=="http://trial-proxy.railway.internal:4000"
-    assert cfg["auxiliary"]["compression"]["fallback_chain"]==[]
-
-
-@pytest.mark.parametrize("options",[{"auxiliary":None},{"auxiliary":{"compression":None}},{"delegation":None},{"smart_model_routing":None}])
-def test_runtime_model_normalization_rejects_ambiguous_null_options(tmp_path,options):
-    import yaml
-    source=tmp_path/"old.yaml";source.write_text(yaml.safe_dump(options));target=tmp_path/"new.yaml"
-    with pytest.raises(MigrationError,match="unreviewed_model_options"):
-        transform.prepare_runtime_config(source,target,checksum(source),"owner-conversation")
-    assert not target.exists()
+    assert all(cfg[key]==value for key,value in original.items())
+    assert auth.resolve_provider(cfg["model"]["provider"])=="openai-codex"
 
 
 def test_reviewed_documentation_exception_is_hash_bound_and_never_executable(tmp_path):

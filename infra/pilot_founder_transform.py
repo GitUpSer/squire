@@ -72,8 +72,6 @@ def translated_job(job,spec,runtime,selected):
         result.update(replacement);result.update({"enabled_toolsets":["memory","squire-group","no_mcp"],"no_agent":False})
     else:
         result=copy.deepcopy(job)
-        # Migrated private jobs inherit the service-funded runtime model.
-        for field in ("model","provider","base_url"):result[field]=None
         contexts=result.get("context_from") or []
         if isinstance(contexts,str):contexts=[contexts]
         # Hermes resolves this reserved sentinel to the current job, including
@@ -221,8 +219,8 @@ def prepare_private_environment(source,output,expected_checksum):
     source,output=Path(source),Path(output)
     require(checksum(source)==expected_checksum and not output.exists(),"environment_snapshot_changed_or_output_exists")
     retained=[];quarantined=[]
-    exact={"INTERNAL_API_TOKEN","CONTROL_API_URL","HOME","HERMES_HOME","HERMES_MANAGED_DIR","HERMES_SAFE_MODE","PYTEST_CURRENT_TEST","PORT","CLAUDE_CODE_OAUTH_TOKEN"}
-    prefixes=("WHATSAPP_","TELEGRAM_","DISCORD_","SLACK_","SIGNAL_","SQUIRE_","MESSAGING_","WACLI_","WEBHOOK_","ANTHROPIC_")
+    exact={"INTERNAL_API_TOKEN","CONTROL_API_URL","HOME","HERMES_HOME","HERMES_MANAGED_DIR","HERMES_SAFE_MODE","PYTEST_CURRENT_TEST","PORT"}
+    prefixes=("WHATSAPP_","TELEGRAM_","DISCORD_","SLACK_","SIGNAL_","SQUIRE_","MESSAGING_","WACLI_","WEBHOOK_")
     for line in source.read_text().splitlines():
         if not line.strip() or line.lstrip().startswith("#"):continue
         match=re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$",line.strip())
@@ -236,17 +234,15 @@ def prepare_private_environment(source,output,expected_checksum):
 
 
 def prepare_private_auth(source,output,expected_checksum):
-    """Keep owner tool OAuth while the runtime receives its Anthropic key from the proxy."""
+    """Validate and preserve the private founder's existing provider credentials."""
     source,output=Path(source),Path(output)
     require(checksum(source)==expected_checksum and not output.exists(),"auth_snapshot_changed_or_output_exists")
     auth=json.loads(source.read_text())
     require(isinstance(auth,dict) and type(auth.get("version")) is int and auth["version"]==1,"unreviewed_auth_schema")
     for name in ("providers","credential_pool"):
         require(isinstance(auth.get(name,{}),dict),"unreviewed_auth_schema")
-        auth.get(name,{}).pop("anthropic",None)
-    if auth.get("active_provider")=="anthropic":auth["active_provider"]=None
     atomic_json(output,auth)
-    return {"removed_provider":"anthropic","source_sha256":expected_checksum,"target_sha256":checksum(output)}
+    return {"owner_provider_credentials_preserved":True,"source_sha256":expected_checksum,"target_sha256":checksum(output)}
 
 
 def prepare_runtime_config(source,output,expected_checksum,conversation_id,approved_mcp_servers=(),skill_paths=()):
@@ -263,17 +259,6 @@ def prepare_runtime_config(source,output,expected_checksum,conversation_id,appro
     config["platform_toolsets"]={"squire":tools} if tools else {}
     config["platforms"]={"squire":{"enabled":True,"home_channel":{"platform":"squire","chat_id":conversation_id},"gateway_restart_notification":False,"typing_indicator":False}}
     config["plugins"]={"enabled":["squire-overlay"],"disabled":[]};config["hooks"]={}
-    config["model"]={"default":"claude-sonnet-5","provider":"anthropic"}
-    config["fallback_providers"]=[]
-    for legacy in ("provider","base_url","api_base","api_key","fallback_model"):config.pop(legacy,None)
-    require(isinstance(config.get("smart_model_routing",{}),dict)
-            and isinstance(config.get("auxiliary",{}),dict),"unreviewed_model_options")
-    config.setdefault("smart_model_routing",{})["enabled"]=False
-    # These call sites can override the primary model and bypass its proxy route.
-    for options in [config.setdefault("delegation",{}),*(config.get("auxiliary") or {}).values()]:
-        require(isinstance(options,dict),"unreviewed_model_options")
-        options.update({"provider":"anthropic","model":"claude-sonnet-5","base_url":"","api_key":""})
-        options.pop("api_base",None);options["fallback_chain"]=[]
     for legacy in ("whatsapp","telegram","discord","slack","signal","webhook"):config.pop(legacy,None)
     config.setdefault("skills",{})["external_dirs"]=list(skill_paths)
     config.setdefault("memory",{})["provider"]="hindsight"

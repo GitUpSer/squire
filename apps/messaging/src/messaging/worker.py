@@ -52,7 +52,7 @@ def claim_inbound() -> Claim | None:
     with Session(engine()) as db:
         candidates = db.exec(select(InboxEvent).outerjoin(TenantState, InboxEvent.tenant_id == TenantState.tenant_id)
             .where(InboxEvent.state == "pending", InboxEvent.next_attempt_at <= now())
-            .order_by(TenantState.last_dispatched_at.asc().nullsfirst(), InboxEvent.created_at, InboxEvent.id)
+            .order_by((InboxEvent.kind == "group_command").desc(), TenantState.last_dispatched_at.asc().nullsfirst(), InboxEvent.created_at, InboxEvent.id)
             .limit(32).with_for_update(skip_locked=True, of=InboxEvent)).all()
         for row in candidates:
             binding = None
@@ -63,7 +63,7 @@ def claim_inbound() -> Claim | None:
                 earliest = db.exec(select(InboxEvent.id).where(InboxEvent.binding_id == binding.id,
                     InboxEvent.state.in_(["pending", "claimed"]))
                     .order_by(InboxEvent.created_at, InboxEvent.id).limit(1)).first()
-                if earliest != row.id:
+                if earliest != row.id and row.kind != "group_command":
                     continue
             owner = identifier()
             row.state, row.lease_owner, row.lease_until = "claimed", owner, now() + settings().lease_seconds
@@ -158,14 +158,21 @@ def dispatch(claim: Claim, client: httpx.Client) -> None:
                 db.commit()
                 finish_inbound(claim, "cancelled", "binding_unavailable")
                 return
-            if snapshot and not participates(db, binding, event, snapshot):
-                db.commit()
-                finish_inbound(claim, "ignored")
-                return
+            if snapshot:
+                fresh_snapshot(event, snapshot)
+                if not owner_present(db, binding.tenant_id, snapshot):
+                    revoke_group(db, binding)
+                    db.commit()
+                    finish_inbound(claim, "cancelled", "owner_left_group")
+                    return
             runtime = db.get(Runtime, binding.runtime_id) if binding.runtime_id else None
             if not runtime or not runtime.active:
                 db.commit()
                 finish_inbound(claim, "pending", "runtime_unavailable")
+                return
+            if snapshot and not participates(db, binding, event, snapshot):
+                db.commit()
+                finish_inbound(claim, "ignored")
                 return
             runtime_id, tenant_id = runtime.id, tenant.tenant_id
             endpoint, ingress_token = runtime.endpoint, open_sealed(runtime.ingress_token_enc, "runtime:" + runtime.id)

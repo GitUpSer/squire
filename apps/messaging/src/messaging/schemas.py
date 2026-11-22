@@ -159,6 +159,13 @@ class ImportBinding(StrictModel):
     handled_provider_message_ids: list[Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:-]+$")]] = Field(default_factory=list, max_length=1000)
     owner_recipient: str | None = Field(default=None, max_length=150)
     group_limit: int = Field(default=1, ge=1, le=100)
+    group_mode: Literal["addressed", "all"] = "addressed"
+
+    @model_validator(mode="after")
+    def group_mode_scope(self):
+        if self.kind != "group" and self.group_mode != "addressed":
+            raise ValueError("all-message mode requires a group import")
+        return self
 
 
 class ShareRequest(StrictModel):

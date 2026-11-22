@@ -380,10 +380,16 @@ def import_binding(db: Session, req: ImportBinding) -> dict:
     if tenant.account_id != req.account_id:
         raise HTTPException(409, "account mismatch")
     tenant = lock_tenant(db, req.tenant_id)
+    prior_binding = binding_for(db, req.recipient)
     binding = new_binding(db, tenant, req.recipient, req.kind, req.activated_at)
     if (binding.kind != req.kind or binding.provider_account_id != settings().provider_account_id
         or binding.activated_at != req.activated_at):
         raise HTTPException(409, "import binding scope or replay boundary changed")
+    if req.kind == "group":
+        if prior_binding and binding.mode != req.group_mode:
+            raise HTTPException(409, "import cannot change existing group mode")
+        binding.mode = req.group_mode
+        db.add(binding)
     for alias in req.aliases:
         alias_to(db, alias, binding, "operator-migration:" + req.operation_id)
     if req.kind == "group":

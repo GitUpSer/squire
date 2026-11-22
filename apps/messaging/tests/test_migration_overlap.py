@@ -69,3 +69,26 @@ def test_import_rejects_prebinding_alias_observation_atomically(client):
     with Session(engine()) as db:
         assert db.exec(select(Binding)).all()==[] and db.exec(select(TenantState)).all()==[]
         assert db.exec(select(InboxEvent)).one().state=="ignored"
+
+
+def test_operator_group_mode_preserves_reviewed_policy_through_genuine_claim(client):
+    from messaging.models import Binding
+    from messaging.service import create_group_claim,now
+    from messaging.groups import handle_command
+    from messaging.schemas import GroupSnapshot
+    owner=request();assert client.post("/v1/operator/bindings/import",headers=headers("operator"),json=owner).status_code==200
+    with Session(engine()) as db:
+        approval=create_group_claim(db,"owner","normal-group-claim");db.commit()
+    group={**owner,"operation_id":"group-migration","recipient":"120333444@g.us","aliases":[],"kind":"group","owner_recipient":owner["recipient"],"group_mode":"all","handled_provider_message_ids":[]}
+    result=client.post("/v1/operator/bindings/import",headers=headers("operator"),json=group)
+    assert result.status_code==200;binding=result.json()["conversation_id"]
+    assert client.post("/v1/operator/bindings/import",headers=headers("operator"),json=group).status_code==200
+    assert client.post("/v1/operator/bindings/import",headers=headers("operator"),json={**group,"group_mode":"addressed"}).status_code==409
+    assert client.post("/v1/operator/bindings/import",headers=headers("operator"),json={**owner,"group_mode":"all"}).status_code==422
+    assert client.patch("/v1/control/groups/"+binding,headers=headers("control"),json={"tenant_id":"owner","mode":"all"}).status_code==403
+    with Session(engine()) as db:
+        cmd=event(text="!squire claim "+approval["nonce"],chat=group["recipient"],chat_type="group",sender_jid=owner["recipient"])
+        snapshot=GroupSnapshot(jid=group["recipient"],fetched_at=now(),participants=[{"jid":owner["recipient"],"admin":True}])
+        assert handle_command(db,cmd,snapshot)
+        row=db.get(Binding,binding);assert row.mode=="all" and row.activated_at==1000
+        db.commit()
