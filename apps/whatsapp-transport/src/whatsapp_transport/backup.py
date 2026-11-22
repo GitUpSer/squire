@@ -25,6 +25,7 @@ async def snapshot_transport(settings, supervisor, capture):
         for name, source in files.items():
             require(source.is_file(), "transport_store_not_initialized")
             backup_sqlite(source, stage / name, sqlite_inventory(source)["schema_sha256"])
+        require({path.name for path in stage.iterdir()} == set(files), "backup_unexpected_sidecars")
         atomic_json(stage / "manifest.json", {"format": "squire-ops-backup-v1", "kind": "transport",
             "service": "transport", "created_at": time.time(), "provider_account_id": settings.provider_account_id,
             "generation": capture.ledger.get("generation"), "outbound_restore_policy": "disabled_until_operator_fence",

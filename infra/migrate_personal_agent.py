@@ -116,6 +116,10 @@ def backup_sqlite(source: Path, destination: Path, expected_schema: str, timeout
     with contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=5)) as src, offline_sqlite(destination) as target:
         src.backup(target, pages=256, progress=progress, sleep=0.05)
         require(target.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "sqlite_backup_corrupt")
+    # Archive copies must be self-contained even when subsequently inspected
+    # read-only. Opening a WAL-mode copy may create SHM/WAL sidecars on close.
+    with offline_sqlite(destination) as target:
+        require(target.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete", "backup_journal_mode_failed")
     destination.chmod(0o600)
     require(sqlite_inventory(destination).get("schema_sha256") == expected_schema, "backup_schema_changed")
 

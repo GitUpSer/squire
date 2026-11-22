@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare consistent SQLite and logical PostgreSQL copies for tenant restic."""
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -31,6 +32,53 @@ def digest(path):
     return result.hexdigest()
 
 
+def sqlite_snapshot(source, target, progress):
+    # SQLite's context manager commits, but does not close. Finish the offline
+    # destination in its main file before hashing; never checkpoint the source.
+    with closing(sqlite3.connect(source.as_uri()+"?mode=ro",uri=True)) as src, closing(sqlite3.connect(target)) as dst:
+        src.backup(dst,pages=256,sleep=0.05,progress=progress)
+        dst.commit()
+        status=dst.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        require(status is not None and status[0]==0,"sqlite_snapshot_checkpoint_busy")
+        require(dst.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower()=="delete","sqlite_snapshot_not_standalone")
+        require(dst.execute("PRAGMA integrity_check").fetchone()[0]=="ok","sqlite_integrity_failed")
+    require(not Path(str(target)+"-wal").exists() and not Path(str(target)+"-shm").exists(),"sqlite_snapshot_sidecars_remain")
+
+
+def postgres_snapshot(volume, instance_file, stage):
+    require(not instance_file.is_symlink(), "unsafe_postgres_config")
+    cfg = json.loads(instance_file.read_text())
+    data = Path(cfg["data_dir"]).resolve()
+    require(data == (instance_file.parent / "data").resolve(), "postgres_data_path_mismatch")
+    require((data/"postmaster.pid").is_file(),"postgres_cluster_not_running_no_snapshot")
+    lines = (data / "postmaster.pid").read_text().splitlines()
+    pid = int(lines[0])
+    executable = (Path("/proc") / str(pid) / "exe").resolve(strict=True)
+    args = (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
+    require(executable.name == "postgres" and str(data).encode() in args, "postgres_process_mismatch")
+    installation=Path(cfg["installation_dir"]).resolve(strict=True)
+    require(installation==(volume/".pg0/installation").resolve() and executable.is_relative_to(installation),"postgres_installation_mismatch")
+    # pg0 metadata names its installation root, while binaries are nested under
+    # the bundled PostgreSQL version. Use the verified running server's siblings.
+    binary = executable.parent
+    require(all((binary/name).is_file() and (binary/name).resolve().parent==binary for name in ("psql","pg_dump","pg_restore")),"matching_postgres_tools_missing")
+    major = (data / "PG_VERSION").read_text().strip()
+    require(major == "18", "postgres_major_unreviewed")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    env.update(PGHOST="127.0.0.1", PGPORT=str(cfg["port"]), PGUSER=cfg["username"], PGDATABASE=cfg["database"],
+               PGPASSWORD=cfg["password"], PGCONNECT_TIMEOUT="10")
+    actual = command([str(binary / "psql"), "--no-password", "--no-psqlrc", "-Atc", "SHOW data_directory"], env).decode().strip()
+    require(actual == str(data), "postgres_connection_mismatch")
+    database_bytes = int(command([str(binary / "psql"), "--no-password", "--no-psqlrc", "-Atc", "SELECT pg_database_size(current_database())"], env).decode().strip())
+    require(shutil.disk_usage(volume).free > database_bytes * 1.2 + 128 * 1024**2, "postgres_backup_space_insufficient")
+    target = stage / "postgres" / (instance_file.parent.name + ".dump")
+    target.parent.mkdir(exist_ok=True, mode=0o700)
+    command([str(binary / "pg_dump"), "--no-password", "--format=custom", "--no-owner", "--no-acl", "--file", str(target)], env)
+    command([str(binary / "pg_restore"), "--list", str(target)])
+    target.chmod(0o600)
+    return {"major": major, "database": cfg["database"], "sha256": digest(target)},str(data)
+
+
 def prepare(volume: Path, destination: Path):
     volume, destination = volume.resolve(), destination.resolve()
     require(destination.is_relative_to(volume) and not volume.is_relative_to(Path("/dev/shm")), "unsafe_backup_location")
@@ -58,39 +106,17 @@ def prepare(volume: Path, destination: Path):
                 deadline = time.monotonic() + 900
                 def progress(status, remaining, total):
                     require(time.monotonic() < deadline, "sqlite_backup_timeout")
-                with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as src, sqlite3.connect(target) as dst:
-                    src.backup(dst, pages=256, sleep=0.05, progress=progress)
-                    require(dst.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "sqlite_integrity_failed")
+                sqlite_snapshot(source,target,progress)
                 target.chmod(0o600)
                 excluded.extend([str(source), str(source) + "-wal", str(source) + "-shm"])
                 manifest["sqlite"][relative] = {"sha256": digest(target), "sqlite_version": sqlite3.sqlite_version}
-        for instance_file in sorted((volume / ".pg0/instances").glob("*/instance.json")):
-            require(not instance_file.is_symlink(), "unsafe_postgres_config")
-            cfg = json.loads(instance_file.read_text())
-            data = Path(cfg["data_dir"]).resolve()
-            require(data == (instance_file.parent / "data").resolve(), "postgres_data_path_mismatch")
-            lines = (data / "postmaster.pid").read_text().splitlines()
-            pid = int(lines[0])
-            executable = (Path("/proc") / str(pid) / "exe").resolve()
-            args = (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
-            require(executable.name == "postgres" and str(data).encode() in args, "postgres_process_mismatch")
-            binary = Path(cfg["installation_dir"]) / "bin"
-            major = (data / "PG_VERSION").read_text().strip()
-            require(major == "18", "postgres_major_unreviewed")
-            env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
-            env.update(PGHOST="127.0.0.1", PGPORT=str(cfg["port"]), PGUSER=cfg["username"], PGDATABASE=cfg["database"],
-                       PGPASSWORD=cfg["password"], PGCONNECT_TIMEOUT="10")
-            actual = command([str(binary / "psql"), "--no-password", "--no-psqlrc", "-Atc", "SHOW data_directory"], env).decode().strip()
-            require(actual == str(data), "postgres_connection_mismatch")
-            database_bytes = int(command([str(binary / "psql"), "--no-password", "--no-psqlrc", "-Atc", "SELECT pg_database_size(current_database())"], env).decode().strip())
-            require(shutil.disk_usage(volume).free > database_bytes * 1.2 + 128 * 1024**2, "postgres_backup_space_insufficient")
-            target = stage / "postgres" / (instance_file.parent.name + ".dump")
-            target.parent.mkdir(exist_ok=True, mode=0o700)
-            command([str(binary / "pg_dump"), "--no-password", "--format=custom", "--no-owner", "--no-acl", "--file", str(target)], env)
-            command([str(binary / "pg_restore"), "--list", str(target)])
-            target.chmod(0o600)
-            manifest["postgres"][instance_file.parent.name] = {"major": major, "database": cfg["database"], "sha256": digest(target)}
-            excluded.append(str(data))
+        instances=volume/".pg0/instances"
+        for cluster in instances.glob("*/data"):
+            require((cluster.parent/"instance.json").is_file(),"postgres_cluster_metadata_missing_no_snapshot")
+        for instance_file in sorted(instances.glob("*/instance.json")):
+            metadata,data=postgres_snapshot(volume,instance_file,stage)
+            manifest["postgres"][instance_file.parent.name]=metadata
+            excluded.append(data)
         if os.environ.get("HINDSIGHT_API_DATABASE_URL", "").startswith("pg0://"):
             require(manifest["postgres"], "configured_hindsight_not_backed_up")
         (stage / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))

@@ -10,7 +10,7 @@ until the acceptance gates in `wacli-pilot-implementation-plan.md` pass.
 - Production environment: `e921611e-edc6-44f6-b538-185da4bd4fa1`.
 - Frontend service: `app-web`, `db10d96a-e7f4-4255-ac94-4c03b0590644`.
 - Custom domain: `app.thesquire.co`; DNS and ownership verified, TLS valid.
-- Transport is healthy in phone-pairing mode; no founder cutover or WhatsApp send has occurred.
+- Transport was paired on November 22 and is healthy in capture-only mode; no founder cutover or WhatsApp send has occurred.
 - Existing marketing site and staging fleet remain separate.
 
 Required frontend DNS records:
@@ -31,8 +31,8 @@ Required frontend DNS records:
 | control-worker | `c5e4b1e8-4fa6-47e8-a6f7-ad1bdfb4ce3e` | SUCCESS; processing disabled |
 | messaging-api | `e2471ffb-9747-4e48-8359-9f656a6e3d3c` | SUCCESS; explicit pre-deploy migration |
 | messaging-worker | `bdf3a124-3bc3-4c80-befd-fd1f171f9dff` | SUCCESS; outbound disabled |
-| trial-proxy | `40a0c990-bb27-4eb4-a46d-e35b7bf384ad` | SUCCESS; replacement Anthropic credential required |
-| wacli-transport | `880eca27-7b70-4b62-adf8-e84e465e2bf3` | SUCCESS; pairing mode; outbound disabled |
+| trial-proxy | `40a0c990-bb27-4eb4-a46d-e35b7bf384ad` | SUCCESS; replacement credential verified; real scoped gateway turn passed November 22 |
+| wacli-transport | `880eca27-7b70-4b62-adf8-e84e465e2bf3` | SUCCESS; paired, capture active; outbound disabled |
 | app-web | `db10d96a-e7f4-4255-ac94-4c03b0590644` | SUCCESS; HTTPS 200; operator API paths 404 |
 
 Initial deployment IDs (superseded by the verification update below): control API `a4ce6351-a8e5-4d04-92eb-9e4be6eed836`,
@@ -529,3 +529,79 @@ or discarded. Build contexts contained only public site files, Caddy config and
 Dockerfile; manifest hashes are
 `66c84ca8c04ac6ab619fd23840bba9852da01795697227fb989edf3afd65da49` (pilot) and
 `b1febb92bd48e246e47928481c63b71d97dbb42660ccf211325ca6be8fc9732e` (marketing).
+
+### November 22 phone linking, funded gateway turn and transport recovery
+
+The replacement Anthropic credential authenticated successfully and was installed
+only in the trial proxy, deployment `802b3eef-76b8-42ab-8f22-a5516d1afeab`
+(SUCCESS). The isolated standard runtime received a separate 30-minute virtual
+key with a non-resetting $1 cutoff and one-request concurrency. Its messaging
+and control endpoints pointed to a loopback-only operator sink; it had no
+production bindings or WhatsApp delivery route.
+
+The actual Hermes gateway on rc12 deployment
+`842fc8a3-80bf-4b14-af4d-5697c7a623d0` completed one synthetic event, returned the
+exact expected reply, invoked zero tools, and recorded one accepted outbox
+response. Replaying the identical event left both ledgers unchanged for ten
+seconds. The proxy recorded one successful native Anthropic generation costing
+$0.0565615, plus two zero-cost budget-denied preflight records; these are not
+three successful model calls. No further successful generation appeared after
+replay. Spend-log message/response columns were empty. The temporary key was
+revoked and its alias lookup returned no keys. Cleanup deployment
+`089f0540-8e17-4776-8139-0d1d78ee1974` is healthy with no model credential and
+both endpoints restored to unused loopback port 9. Completed synthetic ledger
+records are retained as evidence. This is a real model/gateway proof, not a
+WhatsApp delivery proof. The operator helper has 38 contract tests, including
+strict validation of Hermes' generated, secret-free environment-key metadata.
+
+The founder used the primary phone to link the new device in a private terminal.
+Initial app-state sync warnings were followed by successful authentication.
+Capture-only reconnection verified an authenticated, non-revoked session, exactly
+one sync process, no store/capture errors, and a reconciled ingest checkpoint.
+Pairing mode is off, retention is on, generation remains 1, and transport plus
+both messaging services remain outbound-disabled. Final transport deployment
+`2dcbec2b-5341-4409-976e-d2e8b55dd118` reached SUCCESS. The source agent remains
+the sole sender. Current connectivity is not a live-message roundtrip claim.
+
+The first encrypted transport archive correctly failed offline verification due
+to unmanifested SQLite WAL/SHM sidecars. Snapshot copies now finish in standalone
+DELETE-journal mode before hashing; live source journals are unchanged. Archive
+creation rejects extra files, verification uses immutable closed connections,
+and offline restoration checkpoints/closes the generation-fence updates before
+publishing its copy. A fresh 2,069,176-byte archive with SHA256
+`5727e4e4977be0befc73f34280518199d8d342aea37a47cff4a9635f74b4c262` passed cloud
+upload/download, authenticated decryption, all three SQLite integrity checks,
+and offline restoration. The restored session/store hashes were unchanged;
+only its separate ledger advanced to generation 2, disabled outbound and
+quarantined interrupted sends. That copy was never connected.
+
+Daily backup worker deployment `34b421b4-fb14-4107-95da-a4bfda5ce95f` reached
+SUCCESS with the private transport backup URL and dedicated backup principal.
+Its 03:00 UTC schedule is unchanged; the first scheduled transport run has not
+yet been observed. The successful recovery evidence above came from the manual
+cloud roundtrip. Independent transport/migration/backup checks passed 54 tests
+with two external-gate skips. See `runbooks/transport-capture-recovery.md`.
+
+Runtime backup review separately found unclosed SQLite snapshot handles and an
+incorrect unversioned PostgreSQL tools path. The reviewed repair materializes
+SQLite WAL contents in standalone copies and derives matching PostgreSQL tools
+from the verified live server executable. Stopped or unresolved clusters fail
+closed rather than being silently omitted. Nine regression tests pass. Actual
+standard-canary preparation as runtime UID10000 produced eight standalone SQLite
+snapshots and a PostgreSQL archive; a temporary restore matched all 22 table
+counts and full-row hashes. The founder canary's managed PostgreSQL component
+independently matched all 15 tables after restore. Its stopped reference cluster
+was untouched, so this second result is explicitly a component proof, not a
+full-volume founder backup. Both sources remained unchanged, and both temporary
+restore databases were removed. No provider calls were involved.
+
+The standard and founder archive checksums are respectively
+`63c362f1dfeb6fa403c72136e618ed11c8fbd384c8588ddbc0aed8b62e3ea47f`
+and `7267b8f1cf148af36051cf74a050f7b7b360742a0fd6332eda8acb99e6927101`.
+The new operator helper tests are included in runtime CI; their combined run
+with runtime backup tests passed all 51 tests. Refreshed runtime images are
+required before founder cutover.
+
+Admission/workers remain closed. Final founder import and integration checks,
+approved live groups/media, rollback/24-hour soak, and the reserved fresh
+website signup remain outstanding; the tester invitation is still undelivered.

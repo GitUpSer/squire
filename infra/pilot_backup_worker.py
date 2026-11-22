@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Central daily encrypted control/messaging/transport backups; no receiver key."""
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -106,7 +107,9 @@ def verify_ops_tree(root):
             run(["pg_restore", "--list", str(path)], timeout=60)
         elif name.endswith((".db", ".sqlite3")):
             import sqlite3
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            # These are checksum-verified, offline main files. Immutable mode
+            # avoids creating WAL/SHM sidecars while validating the archive.
+            with contextlib.closing(sqlite3.connect(f"file:{path}?immutable=1", uri=True)) as db:
                 require(db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "ops_sqlite_corrupt")
     return {"verified": True, "service": manifest["service"], "kind": manifest["kind"], "file_count": len(manifest["files"])}
 
