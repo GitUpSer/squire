@@ -33,6 +33,9 @@ class Store:
               argument_digest TEXT NOT NULL,state TEXT NOT NULL,started REAL NOT NULL,finished REAL);
             CREATE TABLE IF NOT EXISTS runtime (id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER,generation INTEGER,ready INTEGER,model_ready INTEGER,updated REAL);
             ''')
+            db.execute("BEGIN IMMEDIATE")
+            if "owner_provider" not in {row[1] for row in db.execute("PRAGMA table_info(runtime)")}:
+                db.execute("ALTER TABLE runtime ADD COLUMN owner_provider TEXT")
         os.chmod(self.path,0o600)
 
     @contextmanager
@@ -151,10 +154,13 @@ class Store:
             if row and row["generation"]==generation:
                 try: os.kill(row["pid"],0);alive=True
                 except (ProcessLookupError,PermissionError): pass
-            return {"ready":bool(alive and row["ready"]),"model_ready":bool(alive and row["ready"] and row["model_ready"]),"deployment_generation":generation,"uncertain":uncertain}
+            ready=bool(alive and row["ready"] and row["model_ready"])
+            owner=row["owner_provider"] if ready and 0<=time.time()-row["updated"]<=60 else None
+            return {"ready":bool(alive and row["ready"]),"model_ready":ready,"deployment_generation":generation,"uncertain":uncertain,"owner_provider":owner}
 
-    def mark_runtime(self,generation,ready,model_ready):
-        with self.db() as db: db.execute("INSERT OR REPLACE INTO runtime VALUES(1,?,?,?,?,?)",(os.getpid(),generation,int(ready),int(model_ready),time.time()))
+    def mark_runtime(self,generation,ready,model_ready,owner_provider=None):
+        if owner_provider not in {None,"anthropic","openai","chatgpt"}:raise ValueError("invalid owner provider")
+        with self.db() as db: db.execute("INSERT OR REPLACE INTO runtime(id,pid,generation,ready,model_ready,updated,owner_provider) VALUES(1,?,?,?,?,?,?)",(os.getpid(),generation,int(ready),int(model_ready),time.time(),owner_provider))
 
     def active_event(self):
         with self.db() as db:

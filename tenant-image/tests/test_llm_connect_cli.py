@@ -295,6 +295,8 @@ with open(os.path.join(env_tmpfs, "auth.json"), "w") as fh:
                "providers": {"anthropic": {"auth_mode": "api_key",
                                            "tokens": {"access_token": "keep-me"}}},
                "squire_note": "unrelated-top-level-key"}, fh)
+with open(os.path.join(home, "config.yaml"), "w") as fh:
+    fh.write('model: "anthropic:claude-sonnet-5"\n')
 CLI_ENV = dict(os.environ)
 CLI_ENV.update({
     "HERMES_HOME": home,

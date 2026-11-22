@@ -273,7 +273,7 @@ try:
     # --- happy path: OpenAI key -------------------------------------------
     n1 = squire_connect.mint_nonce(state2)
     status, body = shim_post(n1, "openai", OPENAI_KEY)
-    check("valid OpenAI key -> done page", status == 200 and "back to Telegram" in body,
+    check("valid OpenAI key -> done page", status == 200 and "back to your private chat" in body,
           (status, body[:300]))
     check("provider was actually called to validate",
           any(c["path"] == "/openai/ok" and c["bearer"] == f"Bearer {OPENAI_KEY}"
@@ -481,7 +481,7 @@ check("pipeline order is switch -> restart -> notify",
 
 config_text = open(config_path).read()
 check("model line rewritten to the OpenAI default",
-      'model: "openai:gpt-4.1"' in config_text, config_text)
+      'provider: "openai"' in config_text and 'default: "gpt-4.1"' in config_text, config_text)
 check("the rest of config.yaml survived (targeted line edit, no YAML round-trip)",
       "pre_llm_call: something-load-bearing" in config_text
       and "timezone: UTC" in config_text, config_text)
@@ -497,11 +497,11 @@ check("notify carries the internal bearer",
       notified and notified[0]["auth"] == "Bearer internal-tok-test", notified)
 
 # Model choice per provider (env-overridable, defaults locked here).
-# The API-KEY providers keep the scalar `model:` line.
+# API-key providers select an explicit provider as well as a model.
 open(config_path, "w").write('model: "anthropic:claude-sonnet-5"\n')
 squire_connect.switch_gateway_model("anthropic", home3)
 check("anthropic keeps the sonnet model (direct, no proxy)",
-      'model: "anthropic:claude-sonnet-5"' in open(config_path).read())
+      'provider: "anthropic"' in open(config_path).read() and 'default: "claude-sonnet-5"' in open(config_path).read())
 
 # --- ChatGPT subscription: hermes needs a MAPPING, not a scalar -------------
 # Live 2026-08-16: we wrote `model: "openai:gpt-5-codex"`, which hermes does not
@@ -554,8 +554,8 @@ check("SQUIRE_CONNECT_MODEL_CHATGPT overrides only the slug",
 squire_connect.switch_gateway_model("openai", home3)
 back_text = open(config_path).read()
 check("switching back to a key provider replaces the whole mapping block",
-      'model: "openai:gpt-4.1"' in back_text
-      and "openai-codex" not in back_text and "default:" not in back_text, back_text)
+      'provider: "openai"' in back_text
+      and "openai-codex" not in back_text and 'default: "gpt-4.1"' in back_text, back_text)
 check("the hooks block survived the mapping -> scalar switch too",
       "pre_llm_call:" in back_text and 'timezone: "UTC"' in back_text, back_text)
 
@@ -834,8 +834,8 @@ try:
     squire_connect.run_connected_pipeline("chatgpt", hermes_home=home_ord)
     seq = ([ln.strip() for ln in open(order_log).read().splitlines() if ln.strip()]
            if os.path.exists(order_log) else [])
-    check("pipeline sends the celebration before restarting the gateway",
-          seq[:2] == ["send", "restart"], seq)
+    check("pipeline celebrates only after restarting the gateway",
+          seq[:2] == ["restart", "send"], seq)
 finally:
     os.environ.pop("SQUIRE_HERMES_BIN", None)
     os.environ.pop("SQUIRE_SUPERVISORCTL", None)

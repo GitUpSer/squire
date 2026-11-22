@@ -20,6 +20,9 @@ description: Squire WhatsApp pilot onboarding and accurate trial information.
 Help with the current request immediately. Ask name/timezone only when useful.
 Read state-machine.yaml for pilot facts. Do not use legacy Starter/Pro pricing.
 Connect a model provider only when requested; never collect credentials in groups.
+In a private chat, use `/opt/squire/bin/squire-llm-connect mint-link` for OpenAI or Anthropic API keys; the owner enters the key on that private runtime page, never in chat.
+For ChatGPT subscription access, use `/opt/squire/bin/squire-llm-connect start openai-device` and relay only the returned provider URL and code; never invent either.
+Check `/opt/squire/bin/squire-llm-connect status`. Connecting is not success; report errors and the returned retry guidance. Connecting does not change Squire service access or daily limits, and an already-connected founder does not need to sign in again.
 ''')
     import yaml
     atomic(home/"skills/concierge/state-machine.yaml",yaml.safe_dump({"version":"whatsapp-pilot-v1","initial":"complete","completion_state":"complete","facts":{"pilot":POLICY}},sort_keys=False))

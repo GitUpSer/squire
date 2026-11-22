@@ -188,6 +188,7 @@ _COUNTERS = {
     "updates_rejected": 0,  # refused before delivery (bad auth, malformed request)
 }
 _COUNTERS_LOCK = threading.Lock()
+_CONNECT_SUBMIT_LOCK = threading.Lock()
 
 
 def count(name: str) -> None:
@@ -399,6 +400,9 @@ class Handler(BaseHTTPRequestHandler):
         and the public-domain Host gate in do_POST has already rejected
         public traffic before we get here.
         """
+        if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+            self._respond(403, {"error": "private providers are unavailable in groups"})
+            return
         if squire_connect is None:
             self._respond(404, {"error": "not found"})
             return
@@ -439,6 +443,9 @@ class Handler(BaseHTTPRequestHandler):
         """POST /connect/<nonce>: validate the pasted key with the provider,
         store it, consume the nonce, kick the connected pipeline. An invalid
         key is stated plainly, stores nothing, and leaves the nonce live."""
+        if os.environ.get("SQUIRE_RUNTIME_KIND") == "group":
+            self._respond(403, {"error": "private providers are unavailable in groups"})
+            return
         if squire_connect is None:
             self._respond(404, {"error": "not found"})
             return
@@ -467,6 +474,12 @@ class Handler(BaseHTTPRequestHandler):
         api_key = (form.get("api_key") or [""])[0].strip()
 
         candidate = path[len("/connect/"):]
+        # Parse the bounded body before locking; a slow upload cannot own the lock.
+        with _CONNECT_SUBMIT_LOCK:
+            self._submit_connect(candidate, provider, api_key, ip)
+
+    def _submit_connect(self, candidate, provider, api_key, ip):
+        # One shim process owns nonce check, credential write, and consumption.
         if squire_connect.find_nonce(None, candidate) is None:
             _connect_record_failure(ip)
             self._respond_html(200, squire_connect.render_invalid_page())

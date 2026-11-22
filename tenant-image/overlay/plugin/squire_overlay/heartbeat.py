@@ -9,6 +9,17 @@ from .config import RuntimeConfig
 from .store import Store
 
 
+def reconcile_provider(scope,status):
+    if scope.kind!="dm" or not status.get("owner_provider"):return True
+    import squire_connect
+    connection=squire_connect.connection_status(str(scope.home))
+    provider=status["owner_provider"]
+    # An old same-provider process is not proof that a new credential was adopted.
+    if connection.get("state") not in {"none","connected"}:return True
+    if connection.get("state")=="connected" and connection.get("provider")!=provider:return True
+    return squire_connect.notify_control_api(provider)
+
+
 def run(once=False):
     scope=RuntimeConfig.from_env();store=Store(scope.database);stop=threading.Event()
     def emit():
@@ -18,7 +29,7 @@ def run(once=False):
         try:
             with urllib.request.urlopen(request,timeout=15) as response:ok=200<=response.status<300
         except (OSError,urllib.error.URLError):ok=False
-        return ok,payload
+        return (ok and reconcile_provider(scope,status)),payload
     if once:return 0 if emit()[0] else 1
     signal.signal(signal.SIGTERM,lambda *_:stop.set());signal.signal(signal.SIGINT,lambda *_:stop.set())
     previous=None;last_sent=0

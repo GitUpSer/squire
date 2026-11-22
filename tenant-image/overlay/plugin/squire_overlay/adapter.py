@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import time
+import hmac
+from urllib.parse import urlsplit
 from datetime import datetime,timezone
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -29,6 +31,38 @@ def model_configured(config):
     except Exception:return False
 
 
+def resolved_owner_provider(config):
+    """Compare the gateway's effective route with its selected private credential."""
+    if config.kind != "dm":return None
+    try:
+        import yaml
+        from dotenv import dotenv_values
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+        model=yaml.safe_load((config.home/"config.yaml").read_text()).get("model",{})
+        if not isinstance(model,dict):return None
+        selected=model.get("provider")
+        if selected not in {"anthropic","openai","openai-codex"}:return None
+        # Resolution occurs in the gateway at startup, never in the heartbeat.
+        effective=resolve_runtime_provider()
+        allowed={selected,"custom"} if selected=="openai" else {selected}
+        if effective.get("provider") not in allowed or effective.get("api_mode")=="codex_app_server":return None
+        if selected=="openai-codex":
+            auth=json.loads((config.home/"auth.json").read_text())
+            entry=auth.get("providers",{}).get("openai-codex",{})
+            key=entry.get("tokens",{}).get("access_token")
+            host="chatgpt.com"
+        else:
+            values=dotenv_values(config.home/".env",interpolate=False)
+            key=values.get("ANTHROPIC_API_KEY" if selected=="anthropic" else "OPENAI_API_KEY")
+            host="api.anthropic.com" if selected=="anthropic" else "api.openai.com"
+        actual=effective.get("api_key") or effective.get("access_token")
+        base=urlsplit(effective.get("base_url") or "")
+        if not isinstance(key,str) or not key or not isinstance(actual,str) or not hmac.compare_digest(key,actual):return None
+        if base.scheme!="https" or base.hostname!=host or base.username or base.password:return None
+        return "chatgpt" if selected=="openai-codex" else selected
+    except Exception:return None
+
+
 class SquireAdapter(BasePlatformAdapter):
     supports_async_delivery=True
     supports_inchannel_continuable=True
@@ -47,10 +81,11 @@ class SquireAdapter(BasePlatformAdapter):
         from .media import cleanup
         await asyncio.to_thread(cleanup,self.scope)
         self._model_ready=await asyncio.to_thread(model_configured,self.scope)
+        self._owner_provider=await asyncio.to_thread(resolved_owner_provider,self.scope) if self._model_ready else None
         for event_id in self.store.recover():
             deadline=self.store.event_expiry(event_id)
             if not expired(deadline):self.store.enqueue({"conversation_id":self.scope.conversation_id,"response_key":"recovery:"+event_id,"text":"My last task was interrupted and may have taken an action. I have paused queued work so I don’t repeat it. Please ask the pilot operator to reconcile this task before continuing.","priority":"interactive","cause_event_id":event_id,"_expires_at":deadline})
-        self.store.mark_runtime(self.scope.generation,True,self._model_ready)
+        self.store.mark_runtime(self.scope.generation,True,self._model_ready,self._owner_provider)
         self._tasks=[asyncio.create_task(self._inbox_loop()),asyncio.create_task(self._outbox_loop()),asyncio.create_task(self._media_cleanup_loop())]
         if self.scope.kind=="dm":self._tasks.append(asyncio.create_task(self._approvals_loop()))
         return True
@@ -63,7 +98,7 @@ class SquireAdapter(BasePlatformAdapter):
 
     async def _inbox_loop(self):
         while self._running:
-            self.store.mark_runtime(self.scope.generation,True,self._model_ready)
+            self.store.mark_runtime(self.scope.generation,True,self._model_ready,self._owner_provider)
             if not self._message_handler or not self._model_ready:
                 await asyncio.sleep(1);continue
             envelope=self.store.claim()
@@ -146,6 +181,7 @@ class SquireAdapter(BasePlatformAdapter):
 
     async def _outbox_loop(self):
         while self._running:
+            self.store.mark_runtime(self.scope.generation,True,self._model_ready,self._owner_provider)
             await asyncio.to_thread(self.broker.flush,self.store)
             await asyncio.sleep(.5)
 
