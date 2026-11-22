@@ -674,5 +674,49 @@ fixture converted to Ogg/Opus transcribed in 3 seconds with network calls blocke
 and model hashes unchanged. Process peak was 618 MB; combined container peak
 was 2.96 GB under its 4 GB/2 CPU allocation with Hindsight healthy. Temporary
 files were removed and the production venv was unchanged. The reviewed image
-change bundles this dependency and read-only model; packaged-image verification
-and live founder voice acceptance remain outstanding.
+change bundles this dependency and read-only model. Packaged-image verification
+subsequently passed as recorded below; live founder voice acceptance remains
+outstanding.
+
+### November 22 rc15 deployment and handoff preparation
+
+The rc14 build caught a missing Docker-context allowlist entry for the new STT
+smoke fixture. Commit `d8ccbb9` fixed that entry; fresh rc15 tags passed both
+image builds and registry digest verification. Standard digest
+`sha256:33a684db7deaca23e8098abbeff57211fa3bbd8c27c4aabf50e75f2e2cf5878e`
+and founder digest
+`sha256:71357fa3298a771007c78fe2e5c2e8e31a10e9c306aed39c0daeee97670c9f33`
+are deployed successfully to both canaries and the empty sleep-only founder
+target. Control API and worker now select these images; live readback confirms
+admission and both workers remain disabled.
+
+Both packaged canaries passed runtime health, single-gateway, memory-version,
+mounted-home and tmpfs-secret checks. Their packaged Ogg/Opus speech fixture
+transcribed locally as UID 10000 with network calls blocked and model hashes
+unchanged. Standard/founder elapsed times were 3.48/3.37 seconds; combined
+container peaks were 2.23/2.03 GB under each 4 GB allocation. No funded model
+request or WhatsApp send occurred in these checks.
+
+The expiry-aware API and worker deployed successfully with schema revision 2
+and installed module hashes matching reviewed source. The patched transport
+deployed with wacli `0.26.0-squire.2`. It now runs one connected sync while
+capture and outbound remain disabled. A 56-second observation verified unchanged
+message/receipt ingestion checkpoints, retention state and send records, with
+the same paired identity, generation and activation boundary. This collects
+handoff traffic without processing it; it is not a live messaging acceptance.
+
+The migration import now accepts bounded source-handled message IDs and records
+payload-free completion identities under the normal deduplication key. It uses
+the ingestion transaction lock and refuses conflicting scopes or prior event
+dispositions. PostgreSQL checks passed all 61 messaging tests, including alias
+replay and atomic conflicts; a focused follow-up also proved completion IDs
+survive retention and suppress late replay. Source reconciliation must still
+establish which IDs were actually handled before capture can resume.
+
+Read-only source checks found no active agents, queued bridge messages, live
+turn leases, suspended/resumable turns, pending deliveries or running cron work.
+All 35 delivery obligations were delivered; the seven not directly matched to
+individual inbound IDs predate the proposed replay window. Repeat these checks
+immediately before fencing and reconcile the final snapshot; current idleness
+does not establish the future boundary. Source services remain live, founder
+imports remain unapplied, and the reserved second tester remains untouched.

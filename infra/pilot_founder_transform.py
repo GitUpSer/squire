@@ -72,6 +72,8 @@ def translated_job(job,spec,runtime,selected):
         result.update(replacement);result.update({"enabled_toolsets":["memory","squire-group","no_mcp"],"no_agent":False})
     else:
         result=copy.deepcopy(job)
+        # Migrated private jobs inherit the service-funded runtime model.
+        for field in ("model","provider","base_url"):result[field]=None
         contexts=result.get("context_from") or []
         if isinstance(contexts,str):contexts=[contexts]
         # Hermes resolves this reserved sentinel to the current job, including
@@ -219,8 +221,8 @@ def prepare_private_environment(source,output,expected_checksum):
     source,output=Path(source),Path(output)
     require(checksum(source)==expected_checksum and not output.exists(),"environment_snapshot_changed_or_output_exists")
     retained=[];quarantined=[]
-    exact={"INTERNAL_API_TOKEN","CONTROL_API_URL","HOME","HERMES_HOME","HERMES_MANAGED_DIR","HERMES_SAFE_MODE","PYTEST_CURRENT_TEST","PORT"}
-    prefixes=("WHATSAPP_","TELEGRAM_","DISCORD_","SLACK_","SIGNAL_","SQUIRE_","MESSAGING_","WACLI_")
+    exact={"INTERNAL_API_TOKEN","CONTROL_API_URL","HOME","HERMES_HOME","HERMES_MANAGED_DIR","HERMES_SAFE_MODE","PYTEST_CURRENT_TEST","PORT","CLAUDE_CODE_OAUTH_TOKEN"}
+    prefixes=("WHATSAPP_","TELEGRAM_","DISCORD_","SLACK_","SIGNAL_","SQUIRE_","MESSAGING_","WACLI_","WEBHOOK_","ANTHROPIC_")
     for line in source.read_text().splitlines():
         if not line.strip() or line.lstrip().startswith("#"):continue
         match=re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$",line.strip())
@@ -231,6 +233,20 @@ def prepare_private_environment(source,output,expected_checksum):
         retained.append(line)
     output.parent.mkdir(parents=True,exist_ok=True);output.write_text("\n".join(retained)+"\n");output.chmod(0o600)
     return {"retained_variables":len(retained),"quarantined_variable_names":quarantined,"source_sha256":expected_checksum,"target_sha256":checksum(output)}
+
+
+def prepare_private_auth(source,output,expected_checksum):
+    """Keep owner tool OAuth while the runtime receives its Anthropic key from the proxy."""
+    source,output=Path(source),Path(output)
+    require(checksum(source)==expected_checksum and not output.exists(),"auth_snapshot_changed_or_output_exists")
+    auth=json.loads(source.read_text())
+    require(isinstance(auth,dict) and type(auth.get("version")) is int and auth["version"]==1,"unreviewed_auth_schema")
+    for name in ("providers","credential_pool"):
+        require(isinstance(auth.get(name,{}),dict),"unreviewed_auth_schema")
+        auth.get(name,{}).pop("anthropic",None)
+    if auth.get("active_provider")=="anthropic":auth["active_provider"]=None
+    atomic_json(output,auth)
+    return {"removed_provider":"anthropic","source_sha256":expected_checksum,"target_sha256":checksum(output)}
 
 
 def prepare_runtime_config(source,output,expected_checksum,conversation_id,approved_mcp_servers=(),skill_paths=()):
@@ -247,6 +263,17 @@ def prepare_runtime_config(source,output,expected_checksum,conversation_id,appro
     config["platform_toolsets"]={"squire":tools} if tools else {}
     config["platforms"]={"squire":{"enabled":True,"home_channel":{"platform":"squire","chat_id":conversation_id},"gateway_restart_notification":False,"typing_indicator":False}}
     config["plugins"]={"enabled":["squire-overlay"],"disabled":[]};config["hooks"]={}
+    config["model"]={"default":"claude-sonnet-5","provider":"anthropic"}
+    config["fallback_providers"]=[]
+    for legacy in ("provider","base_url","api_base","api_key","fallback_model"):config.pop(legacy,None)
+    require(isinstance(config.get("smart_model_routing",{}),dict)
+            and isinstance(config.get("auxiliary",{}),dict),"unreviewed_model_options")
+    config.setdefault("smart_model_routing",{})["enabled"]=False
+    # These call sites can override the primary model and bypass its proxy route.
+    for options in [config.setdefault("delegation",{}),*(config.get("auxiliary") or {}).values()]:
+        require(isinstance(options,dict),"unreviewed_model_options")
+        options.update({"provider":"anthropic","model":"claude-sonnet-5","base_url":"","api_key":""})
+        options.pop("api_base",None);options["fallback_chain"]=[]
     for legacy in ("whatsapp","telegram","discord","slack","signal","webhook"):config.pop(legacy,None)
     config.setdefault("skills",{})["external_dirs"]=list(skill_paths)
     config.setdefault("memory",{})["provider"]="hindsight"
@@ -285,10 +312,16 @@ def promote_private_files(source,prepared,output,plan):
         require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root.resolve()) and checksum(path)==item["sha256"],"promoted_file_changed")
         category=item.get("category")
         require(category in {"memory","credential","browser","workspace","skill","hindsight_plugin","runtime_config","environment"},"unreviewed_promotion_category")
-        if str(destination) in {"config.yaml",".env","hindsight/config.json"}:require(root==prepared,"config_requires_prepared_scoped_transform")
+        if str(destination) in {"config.yaml",".env","auth.json","hindsight/config.json"}:require(root==prepared,"config_requires_prepared_scoped_transform")
         if str(destination).startswith("plugins/"):require(str(destination).startswith("plugins/hindsight/"),"legacy_plugin_quarantined")
         if category in {"workspace","skill","hindsight_plugin","runtime_config","environment"}:
-            require(not DIRECT_TRANSPORT.search(path.read_bytes()),"direct_transport_code_quarantined")
+            documentation=item.get("reviewed_transport_documentation")
+            documentation_mode=item.get("source_mode",0)
+            reviewed_documentation=(category=="skill" and destination.suffix==".md"
+                and isinstance(documentation,str) and bool(documentation.strip())
+                and type(documentation_mode) is int and not documentation_mode&0o111
+                and not path.stat().st_mode&0o111)
+            require(not DIRECT_TRANSPORT.search(path.read_bytes()) or reviewed_documentation,"direct_transport_code_quarantined")
         require(category!="browser" and destination.parts[0]!=".camofox","browser_requires_encrypted_state_import")
         if category in {"credential","environment"}:
             require(all(re.fullmatch(r"[A-Za-z0-9_.-]+",part) and part not in {".",".."} for part in destination.parts),"unsafe_sealed_file_name")
@@ -323,11 +356,13 @@ def main():
     memory=sub.add_parser("memory-config");memory.add_argument("source",type=Path);memory.add_argument("output",type=Path);memory.add_argument("--expected-sha256",required=True)
     group=sub.add_parser("group-history");group.add_argument("source",type=Path);group.add_argument("output",type=Path);group.add_argument("--conversation-id",required=True);group.add_argument("--approved-claim-id",required=True);group.add_argument("--runtime-sessions-dir",required=True)
     env=sub.add_parser("private-environment");env.add_argument("source",type=Path);env.add_argument("output",type=Path);env.add_argument("--expected-sha256",required=True)
+    auth=sub.add_parser("private-auth");auth.add_argument("source",type=Path);auth.add_argument("output",type=Path);auth.add_argument("--expected-sha256",required=True)
     cfg=sub.add_parser("runtime-config");cfg.add_argument("source",type=Path);cfg.add_argument("output",type=Path);cfg.add_argument("--expected-sha256",required=True);cfg.add_argument("--conversation-id",required=True);cfg.add_argument("--approved-mcp",action="append",default=[]);cfg.add_argument("--skill-path",action="append",default=[])
     promotion=sub.add_parser("promote-private");promotion.add_argument("source",type=Path);promotion.add_argument("prepared",type=Path);promotion.add_argument("output",type=Path);promotion.add_argument("plan",type=Path)
     args=parser.parse_args()
     if args.command=="promote-private":print(json.dumps(promote_private_files(args.source,args.prepared,args.output,json.loads(args.plan.read_text()))))
     elif args.command=="private-environment":print(json.dumps(prepare_private_environment(args.source,args.output,args.expected_sha256)))
+    elif args.command=="private-auth":print(json.dumps(prepare_private_auth(args.source,args.output,args.expected_sha256)))
     elif args.command=="runtime-config":print(json.dumps(prepare_runtime_config(args.source,args.output,args.expected_sha256,args.conversation_id,args.approved_mcp,args.skill_path)))
     elif args.command=="memory-config":print(json.dumps(prepare_memory_config(args.source,args.output,args.expected_sha256)))
     elif args.command=="group-history":print(json.dumps(import_group_history(args.source,args.output,args.conversation_id,args.approved_claim_id,args.runtime_sessions_dir)))

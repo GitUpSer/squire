@@ -154,12 +154,43 @@ def test_actual_hermes_scheduler_resolves_registered_group_toolset(tmp_path,monk
 
 
 def test_private_environment_quarantines_transport_and_old_control_capabilities(tmp_path):
-    source=tmp_path/"old.env";source.write_text("ANTHROPIC_API_KEY=private-model\nWHATSAPP_TOKEN=legacy-transport\nTELEGRAM_BOT_TOKEN=legacy-bot\nINTERNAL_API_TOKEN=old-master\nSQUIRE_RUNTIME_ID=old-scope\nHOME=/home/hermes\nCALENDAR_API_KEY=owner-calendar\n")
+    source=tmp_path/"old.env";source.write_text("ANTHROPIC_API_KEY=private-model\nANTHROPIC_TOKEN=old-oauth\nANTHROPIC_BASE_URL=https://old.invalid\nCLAUDE_CODE_OAUTH_TOKEN=old-cli\nWEBHOOK_ENABLED=true\nWEBHOOK_SECRET=old-capability\nWHATSAPP_TOKEN=legacy-transport\nTELEGRAM_BOT_TOKEN=legacy-bot\nINTERNAL_API_TOKEN=old-master\nSQUIRE_RUNTIME_ID=old-scope\nHOME=/home/hermes\nCALENDAR_API_KEY=owner-calendar\nGOOGLE_MAPS_API_KEY=owner-maps\nSENTRY_AUTH_TOKEN=owner-sentry\n")
     output=tmp_path/"prepared/.env"
     result=transform.prepare_private_environment(source,output,checksum(source))
-    assert output.read_text()=="ANTHROPIC_API_KEY=private-model\nCALENDAR_API_KEY=owner-calendar\n"
-    assert result["retained_variables"]==2 and "WHATSAPP_TOKEN" in result["quarantined_variable_names"]
+    assert output.read_text()=="CALENDAR_API_KEY=owner-calendar\nGOOGLE_MAPS_API_KEY=owner-maps\nSENTRY_AUTH_TOKEN=owner-sentry\n"
+    assert result["retained_variables"]==3 and "WHATSAPP_TOKEN" in result["quarantined_variable_names"]
     assert "private-model" not in json.dumps(result) and "legacy-transport" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("active",["anthropic","openai-codex",None])
+def test_private_auth_removes_anthropic_rotation_but_preserves_owner_oauth(tmp_path,active):
+    original={"version":1,"providers":{"anthropic":{"tokens":{"access_token":"old-anthropic"}},"openai-codex":{"tokens":{"access_token":"owner-access","refresh_token":"owner-refresh"},"auth_mode":"oauth"}},"credential_pool":{"anthropic":[{"source":"env:ANTHROPIC_API_KEY","secret_fingerprint":"sha256:stale"},{"source":"hermes_pkce","access_token":"old-oauth"}],"openai-codex":[{"source":"codex","access_token":"owner-access","refresh_token":"owner-refresh"}]},"active_provider":active,"updated_at":"2026-11-22T00:00:00Z"}
+    source=tmp_path/"original.json";source.write_text(json.dumps(original));sha=checksum(source)
+    target=tmp_path/"prepared/auth.json";report=transform.prepare_private_auth(source,target,sha)
+    expected=json.loads(json.dumps(original));del expected["providers"]["anthropic"];del expected["credential_pool"]["anthropic"]
+    if active=="anthropic":expected["active_provider"]=None
+    assert json.loads(target.read_text())==expected and checksum(source)==sha
+    assert target.stat().st_mode&0o777==0o600
+    assert not any(secret in json.dumps(report) for secret in ("owner-access","owner-refresh","old-oauth"))
+    with pytest.raises(MigrationError,match="auth_snapshot_changed_or_output_exists"):transform.prepare_private_auth(source,target,sha)
+    with pytest.raises(MigrationError,match="auth_snapshot_changed_or_output_exists"):transform.prepare_private_auth(source,tmp_path/"bad.json","0"*64)
+
+
+@pytest.mark.parametrize("value",[{"version":2},{"version":1,"providers":[]},{"version":1,"credential_pool":[]},[]])
+def test_private_auth_rejects_unreviewed_schema(tmp_path,value):
+    source=tmp_path/"auth.json";source.write_text(json.dumps(value));target=tmp_path/"out.json"
+    with pytest.raises(MigrationError,match="unreviewed_auth_schema"):transform.prepare_private_auth(source,target,checksum(source))
+    assert not target.exists()
+
+
+def test_private_cron_inherits_funded_runtime_instead_of_legacy_override(tmp_path):
+    original,jobs=source(tmp_path);job=jobs[0]
+    job.update(model="claude-opus-4-7",provider="anthropic",base_url="https://old.invalid")
+    spec={"id":job["id"],"source_sha256":transform.fingerprint(job)}
+    runtime={"kind":"dm","old_chat_jid":job["origin"]["chat_id"],"conversation_id":"owner-conversation"}
+    result=transform.translated_job(job,spec,runtime,{job["id"]})
+    assert all(result[key] is None for key in ("model","provider","base_url"))
+    assert result["enabled"] is False and result["prompt"]==job["prompt"]
 
 
 @pytest.mark.parametrize("sectioned",[False,True])
@@ -216,17 +247,70 @@ def test_private_promotion_flattens_home_and_writes_reviewed_marker_last(tmp_pat
 def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hooks(tmp_path):
     import yaml
     source=tmp_path/"old-config.yaml"
-    original={"model":"owner-model","memory":{"provider":"hindsight"},"platforms":{"whatsapp":{"enabled":True},"telegram":{"enabled":True}},"plugins":{"enabled":["legacy-personal"]},"hooks":{"send":"legacy-direct-send.py"},"whatsapp":{"enabled":True},"mcp_servers":{"calendar":{"command":"calendar-cli"},"old-direct":{"command":"wacli send"}},"platform_toolsets":{"whatsapp":["terminal","browser"]}}
+    original={"model":{"default":"owner-model","provider":"openai-codex"},"fallback_providers":[{"provider":"anthropic","model":"old-model"}],"smart_model_routing":{"enabled":True},"delegation":{"model":"old-model","api_key":"old-key","base_url":"https://old.invalid","max_iterations":250},"auxiliary":{"compression":{"model":"old-model","provider":"auto","api_key":"old-key","timeout":120}},"memory":{"provider":"hindsight"},"platforms":{"whatsapp":{"enabled":True},"telegram":{"enabled":True}},"plugins":{"enabled":["legacy-personal"]},"hooks":{"send":"legacy-direct-send.py"},"whatsapp":{"enabled":True},"mcp_servers":{"calendar":{"command":"calendar-cli"},"old-direct":{"command":"wacli send"}},"platform_toolsets":{"whatsapp":["terminal","browser"]}}
     source.write_text(yaml.safe_dump(original));target=tmp_path/"prepared/config.yaml"
     transform.prepare_runtime_config(source,target,checksum(source),"opaque-owner",["calendar"],["/opt/data/skills"])
     config=yaml.safe_load(target.read_text())
-    assert config["model"]=="owner-model" and set(config["platforms"])=={"squire"}
+    assert config["model"]=={"default":"claude-sonnet-5","provider":"anthropic"} and set(config["platforms"])=={"squire"}
+    assert config["fallback_providers"]==[] and config["smart_model_routing"]["enabled"] is False
+    expected={"provider":"anthropic","model":"claude-sonnet-5","base_url":"","api_key":"","fallback_chain":[]}
+    assert config["delegation"]=={**expected,"max_iterations":250}
+    assert config["auxiliary"]["compression"]=={**expected,"timeout":120}
     assert config["platforms"]["squire"]["home_channel"]=={"platform":"squire","chat_id":"opaque-owner"}
     assert "whatsapp" not in config and config["hooks"]=={}
     assert config["plugins"]["enabled"]==["squire-overlay"]
     assert config["mcp_servers"]=={"calendar":{"command":"calendar-cli"}}
     assert config["platform_toolsets"]=={"squire":["terminal","browser"]}
     with pytest.raises(MigrationError,match="direct_send"):transform.prepare_runtime_config(source,tmp_path/"bad.yaml",checksum(source),"opaque-owner",["old-direct"])
+
+
+def test_prepared_model_resolves_actual_hermes_provider_and_proxy_credentials(tmp_path,monkeypatch):
+    pytest.importorskip("hermes_cli")
+    from hermes_cli import auth,config as hermes_config
+    import yaml
+    source=tmp_path/"old.yaml";source.write_text(yaml.safe_dump({"model":{"provider":"openai-codex","default":"owner-model"},"base_url":"https://old.invalid","api_key":"old-key","fallback_model":"owner-model","auxiliary":{"compression":{"provider":"openai-codex","fallback_chain":[{"provider":"openai-codex"}]}},"memory":{}}))
+    target=tmp_path/"prepared.yaml";transform.prepare_runtime_config(source,target,checksum(source),"owner-conversation")
+    cfg=hermes_config._normalize_root_model_keys(yaml.safe_load(target.read_text()))
+    assert cfg["model"]=={"default":"claude-sonnet-5","provider":"anthropic"}
+    monkeypatch.setenv("HERMES_HOME",str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY","synthetic-proxy-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL","http://trial-proxy.railway.internal:4000")
+    for options in [cfg["model"],cfg["delegation"],cfg["auxiliary"]["compression"]]:
+        provider=auth.resolve_provider(options["provider"])
+        resolved=auth.resolve_api_key_provider_credentials(provider)
+        assert resolved["provider"]=="anthropic" and resolved["api_key"]=="synthetic-proxy-key"
+        assert resolved["base_url"]=="http://trial-proxy.railway.internal:4000"
+    assert cfg["auxiliary"]["compression"]["fallback_chain"]==[]
+
+
+@pytest.mark.parametrize("options",[{"auxiliary":None},{"auxiliary":{"compression":None}},{"delegation":None},{"smart_model_routing":None}])
+def test_runtime_model_normalization_rejects_ambiguous_null_options(tmp_path,options):
+    import yaml
+    source=tmp_path/"old.yaml";source.write_text(yaml.safe_dump(options));target=tmp_path/"new.yaml"
+    with pytest.raises(MigrationError,match="unreviewed_model_options"):
+        transform.prepare_runtime_config(source,target,checksum(source),"owner-conversation")
+    assert not target.exists()
+
+
+def test_reviewed_documentation_exception_is_hash_bound_and_never_executable(tmp_path):
+    prepared=tmp_path/"prepared";prepared.mkdir();entries=[]
+    for name in ("config.yaml","SOUL.md","hindsight/config.json","plugins/hindsight/__init__.py"):
+        path=prepared/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("safe")
+        entries.append({"root":"prepared","source":name,"destination":name,"sha256":checksum(path),"category":"runtime_config","reviewed_no_direct_transport":True})
+    doc=prepared/"skills/testing/reference.md";doc.parent.mkdir(parents=True);doc.write_text("Synthetic fixture identity: 19999990000@s.whatsapp.net")
+    entry={"root":"prepared","source":"skills/testing/reference.md","destination":"skills/testing/reference.md","sha256":checksum(doc),"category":"skill","reviewed_no_direct_transport":True}
+    plan={"kind":"dm","runtime_id":"owner-runtime","migration_id":"migration","image_ref":"ghcr.io/org/image@sha256:"+"a"*64,"files":entries+[entry]}
+    with pytest.raises(MigrationError,match="direct_transport_code_quarantined"):transform.promote_private_files(tmp_path/"source",prepared,tmp_path/"blocked",plan)
+    entry["reviewed_transport_documentation"]="Audited synthetic identifier in test documentation; no direct sender instructions."
+    transform.promote_private_files(tmp_path/"source",prepared,tmp_path/"allowed",plan)
+    assert (tmp_path/"allowed/skills/testing/reference.md").read_bytes()==doc.read_bytes()
+    entry["source_mode"]=0o700
+    with pytest.raises(MigrationError,match="direct_transport_code_quarantined"):transform.promote_private_files(tmp_path/"source",prepared,tmp_path/"exec-md",plan)
+    entry.pop("source_mode")
+    doc.write_text(doc.read_text()+" changed")
+    with pytest.raises(MigrationError,match="promoted_file_changed"):transform.promote_private_files(tmp_path/"source",prepared,tmp_path/"changed",plan)
+    script=doc.with_suffix(".py");script.write_bytes(doc.read_bytes());entry.update(source="skills/testing/reference.py",destination="skills/testing/reference.py",sha256=checksum(script))
+    with pytest.raises(MigrationError,match="direct_transport_code_quarantined"):transform.promote_private_files(tmp_path/"source",prepared,tmp_path/"script",plan)
 
 
 def test_cron_wal_outputs_are_complete_without_sidecars(tmp_path,monkeypatch):
