@@ -248,6 +248,8 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
     source=tmp_path/"old-config.yaml"
     original={"model":{"default":"owner-model","provider":"openai-codex"},"fallback_providers":[{"provider":"anthropic","model":"old-model"}],"smart_model_routing":{"enabled":True},"delegation":{"model":"old-model","api_key":"old-key","base_url":"https://old.invalid","max_iterations":250},"auxiliary":{"compression":{"model":"old-model","provider":"auto","api_key":"old-key","timeout":120}},"memory":{"provider":"hindsight"},"platforms":{"whatsapp":{"enabled":True},"telegram":{"enabled":True}},"plugins":{"enabled":["legacy-personal"]},"hooks":{"send":"legacy-direct-send.py"},"whatsapp":{"enabled":True},"mcp_servers":{"calendar":{"command":"calendar-cli"},"old-direct":{"command":"wacli send"}},"platform_toolsets":{"whatsapp":["terminal","browser"]}}
     source.write_text(yaml.safe_dump(original));target=tmp_path/"prepared/config.yaml"
+    original.update(WHATSAPP_HOME_CHANNEL="old@s.whatsapp.net",TELEGRAM_HOME_CHANNEL="old-chat")
+    source.write_text(yaml.safe_dump(original))
     transform.prepare_runtime_config(source,target,checksum(source),"opaque-owner",["calendar"],["/opt/data/skills"])
     config=yaml.safe_load(target.read_text())
     assert set(config["platforms"])=={"squire"}
@@ -255,6 +257,7 @@ def test_runtime_config_preserves_identity_but_removes_legacy_transports_and_hoo
         assert config[key]==original[key]
     assert config["platforms"]["squire"]["home_channel"]=={"platform":"squire","chat_id":"opaque-owner"}
     assert "whatsapp" not in config and config["hooks"]=={}
+    assert "WHATSAPP_HOME_CHANNEL" not in config and "TELEGRAM_HOME_CHANNEL" not in config
     assert config["plugins"]["enabled"]==["squire-overlay"]
     assert config["mcp_servers"]=={"calendar":{"command":"calendar-cli"}}
     assert config["platform_toolsets"]=={"squire":["terminal","browser"]}

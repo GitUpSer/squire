@@ -720,3 +720,25 @@ individual inbound IDs predate the proposed replay window. Repeat these checks
 immediately before fencing and reconcile the final snapshot; current idleness
 does not establish the future boundary. Source services remain live, founder
 imports remain unapplied, and the reserved second tester remains untouched.
+
+Commit `89b0481` fixes group claims waiting behind ordinary work before a runtime
+exists. Only live scoped claim controls bypass pending message order; an active
+processing lease, expiry and fresh administrator checks still apply. Operator
+imports can preserve the existing group's verified participation mode without
+changing the public administrator approval rules. All 70 messaging PostgreSQL
+tests passed; both installed service packages match that commit, with schema 2,
+provider paused, outbound disabled and no bindings or queued sends.
+
+Founder preparation preserves the original private model/authentication and
+scheduled-job overrides. The service-funded customer pool remains separate.
+The combined offline home rehearsal promoted 352 files, kept all seven jobs
+paused and verified the same weekly self-context output selection. Current rc15
+founder recall found the known source fact with all 15 table fingerprints
+unchanged. These use rehearsal data, not a final fenced import. The final
+snapshot must still capture current files, job state and approved project work.
+
+One browser CI run failed because its messaging listener collided with a port
+in Linux's ephemeral client range. Test servers now use 18740–18744. Local
+browser acceptance and all subsequent CI workflows passed, including the two
+synthetic customer signups and group/private approval flows. No real tester was
+contacted by these fixtures.

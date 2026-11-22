@@ -581,3 +581,91 @@ def test_preflight_media_and_rollback_cannot_require_live_sender_actions(tmp_pat
         with pytest.raises(migration.MigrationError,match='preflight_required'):journal.record_gate(gate,proof)
         assert gate not in journal.state['gates']
     finally:journal.close()
+
+
+def checkout_link(tmp_path):
+    checkout = tmp_path / 'repos/example'
+    (checkout / '.claude/skills').mkdir(parents=True)
+    (checkout / 'skills/discovery').mkdir(parents=True)
+    descriptor = dict(path='repos/example/.claude/skills/discovery',
+                      target='../../skills/discovery', checkout_root='repos/example')
+    (tmp_path / descriptor['path']).symlink_to(descriptor['target'])
+    return descriptor
+
+
+def test_approved_checkout_link_is_descriptor_only_and_exact(tmp_path):
+    item = checkout_link(tmp_path)
+    assert migration.approved_symlinks(tmp_path, [item]) == [item]
+    with pytest.raises(migration.MigrationError, match='symlink_not_permitted'):
+        migration.safe_path(tmp_path, item['path'])
+    with pytest.raises(migration.MigrationError, match='approved_symlink_changed'):
+        migration.approved_symlinks(tmp_path, [dict(item, target='../../skills')])
+    with pytest.raises(migration.MigrationError, match='invalid_approved_symlink'):
+        migration.approved_symlinks(tmp_path, [item, item])
+
+
+@pytest.mark.parametrize('target', ['/tmp', '../../../example/skills/discovery', '../../skills/link/../discovery',
+                                    '../../skills/missing/../discovery'])
+def test_approved_checkout_link_rejects_escape_and_symlink_traversal(tmp_path, target):
+    item = checkout_link(tmp_path)
+    link = tmp_path / item['path']
+    link.unlink()
+    link.symlink_to(target)
+    (tmp_path / 'repos/example/skills/link').symlink_to('discovery')
+    with pytest.raises(migration.MigrationError):
+        migration.approved_symlinks(tmp_path, [dict(item, target=target)])
+
+
+def snapshot_fixture(tmp_path, monkeypatch):
+    home = tmp_path / 'home'
+    (home / '.hermes/hermes-agent').mkdir(parents=True)
+    (home / '.hermes/hermes-agent').rename(home / '.hermes' / migration.SOURCE_RELEASE)
+    (home / '.hermes/hermes-agent').symlink_to(migration.SOURCE_RELEASE)
+    source = home / 'job-output.txt'
+    source.write_text('preserved output')
+    source.chmod(0o640)
+    os.utime(source, ns=(1234567890123456, 1234567890123456))
+    schema = make_sqlite(home / 'state.db')
+    plan = dict(source_release=migration.SOURCE_RELEASE, scope='founder_private', migration_id='fixture',
+                files=['job-output.txt'], sqlite={'state.db': schema}, postgres={'fixture': True})
+    monkeypatch.setattr(migration.shutil, 'which', lambda _: '/bin/true')
+    monkeypatch.setattr(migration, 'dump_postgres', lambda _home, _cfg, dest: (dest.parent.mkdir(), dest.write_bytes(b'dump')))
+    observed = {}
+    def archive(stage, output, recipient):
+        observed['manifest'] = json.loads((stage / 'manifest.json').read_text())
+        observed['symlinks'] = [str(p.relative_to(stage)) for p in stage.rglob('*') if p.is_symlink()]
+        output.write_bytes(b'encrypted-fixture')
+    monkeypatch.setattr(migration, 'encrypt_tree', archive)
+    return home, source, plan, observed
+
+
+def test_snapshot_authenticates_original_mtime_and_reviewed_link_without_tarlink(tmp_path, monkeypatch):
+    home, source, plan, observed = snapshot_fixture(tmp_path, monkeypatch)
+    plan['approved_symlinks'] = [checkout_link(home)]
+    migration.snapshot(home, plan, tmp_path / 'snapshot.age', 'age1fixture')
+    record = observed['manifest']['files']['job-output.txt']
+    assert record['source_mtime_ns'] == 1234567890123456
+    assert record['source_mode'] == 0o640
+    assert record['sha256'] == migration.checksum(source)
+    assert observed['manifest']['approved_symlinks'] == plan['approved_symlinks']
+    assert not observed['symlinks']
+    assert plan['approved_symlinks'][0]['path'] not in observed['manifest']['files']
+
+
+@pytest.mark.parametrize('mutation', ['source_mode', 'source_content', 'symlink'])
+def test_snapshot_rechecks_source_metadata_and_links_before_encryption(tmp_path, monkeypatch, mutation):
+    home, source, plan, observed = snapshot_fixture(tmp_path, monkeypatch)
+    plan['approved_symlinks'] = [checkout_link(home)]
+    original_dump = migration.dump_postgres
+    def mutate(*args):
+        original_dump(*args)
+        if mutation == 'source_mode': source.chmod(0o600)
+        elif mutation == 'source_content': source.write_text('changed')
+        else:
+            link = home / plan['approved_symlinks'][0]['path']
+            link.unlink()
+            link.symlink_to('../../skills')
+    monkeypatch.setattr(migration, 'dump_postgres', mutate)
+    with pytest.raises(migration.MigrationError, match='changed'):
+        migration.snapshot(home, plan, tmp_path / 'snapshot.age', 'age1fixture')
+    assert not observed

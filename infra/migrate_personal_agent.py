@@ -184,7 +184,47 @@ def copy_regular(source: Path, destination: Path):
     shutil.copyfile(source, destination, follow_symlinks=False)
     destination.chmod(0o600)
     after = source.stat()
-    require((before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns), "source_file_changed_during_copy")
+    require(source_identity(before) == source_identity(after) and not source.is_symlink(), "source_file_changed_during_copy")
+    return before
+
+
+def source_identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def approved_symlinks(home: Path, descriptors):
+    """Authenticate exact reviewed checkout links without putting links in the archive."""
+    require(isinstance(descriptors, list), "invalid_approved_symlinks")
+    result, seen = [], set()
+    for item in descriptors:
+        require(isinstance(item, dict) and set(item) == {"path", "target", "checkout_root"}
+                and all(isinstance(value, str) and value for value in item.values()), "invalid_approved_symlink")
+        relative, target, checkout = item["path"], item["target"], item["checkout_root"]
+        require(relative not in seen and not Path(target).is_absolute(), "invalid_approved_symlink")
+        seen.add(relative)
+        root = safe_path(home, checkout)
+        require(root.is_dir(), "approved_symlink_checkout_missing")
+        path = Path(relative)
+        require(not path.is_absolute() and bool(path.parts) and ".." not in path.parts, "unsafe_relative_path")
+        parent = safe_path(home, str(path.parent))
+        link = parent / path.name
+        require(link.is_relative_to(root) and link != root, "approved_symlink_outside_checkout")
+        # Permit reviewed ../../ text only while every step remains in this checkout.
+        destination = parent
+        for part in Path(target).parts:
+            destination = destination.parent if part == ".." else destination / part
+            require(destination.is_relative_to(root), "approved_symlink_target_escape")
+            require(not destination.is_symlink(), "symlink_not_permitted")
+        destination = safe_path(home, str(destination.relative_to(home)))
+        require(destination.exists(), "approved_symlink_target_missing")
+        require(link.is_symlink() and os.readlink(link) == target, "approved_symlink_changed")
+        try:
+            resolved = link.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise MigrationError("approved_symlink_target_unresolvable") from None
+        require(resolved == destination.resolve(strict=True), "approved_symlink_target_mismatch")
+        result.append(dict(item))
+    return result
 
 
 def make_plan(home: Path, postgres, *, migration_id=None, maximum_files=100000):
@@ -292,6 +332,7 @@ def snapshot(home: Path, plan, output: Path, recipient: str, *, final=False, jou
         require(journal is not None and journal.state["stage"] == "source_fenced", "final_snapshot_requires_fence")
         assert_fenced(home, journal)
     require(bool(plan.get("sqlite")) and bool(plan.get("files")) and bool(plan.get("postgres")), "incomplete_snapshot_plan")
+    links = approved_symlinks(home, plan.get("approved_symlinks", []))
     sources = [(relative, safe_path(home, relative)) for relative in plan["files"]]
     require(all(not str(Path(relative)).startswith(".pg0/") for relative, _ in sources), "postgres_requires_logical_dump")
     # Explicit file manifests make skipped caches and unapproved external paths reviewable.
@@ -301,9 +342,10 @@ def snapshot(home: Path, plan, output: Path, recipient: str, *, final=False, jou
     with tempfile.TemporaryDirectory(prefix="squire-snapshot-", dir=output.parent) as temporary:
         stage = Path(temporary)
         stage.chmod(0o700)
+        source_stats = {}
         for relative, source in sources:
             require(relative not in plan["sqlite"] and not relative.endswith(("-wal", "-shm")), "sqlite_must_use_backup_api")
-            copy_regular(source, safe_path(stage, relative))
+            source_stats[relative] = copy_regular(source, safe_path(stage, relative))
         for relative, schema in plan["sqlite"].items():
             backup_sqlite(safe_path(home, relative), safe_path(stage, relative), schema)
         dump_postgres(home, plan["postgres"], stage / "postgres/hindsight.dump")
@@ -312,7 +354,7 @@ def snapshot(home: Path, plan, output: Path, recipient: str, *, final=False, jou
                     "consistency": "writers_fenced" if final else "per_database_online_rehearsal",
                     "preserve_source_until": time.time() + 14 * 86400,
                     "sqlite": plan["sqlite"], "postgres_major": 18,
-                    "session_map": plan.get("session_map", []), "files": {}}
+                    "session_map": plan.get("session_map", []), "approved_symlinks": links, "files": {}}
         for path in sorted(stage.rglob("*")):
             if path.is_file():
                 relative = str(path.relative_to(stage))
@@ -320,8 +362,13 @@ def snapshot(home: Path, plan, output: Path, recipient: str, *, final=False, jou
                 if relative in plan["files"]:
                     # Preserve executable intent as authenticated metadata without
                     # making credential-bearing quarantine files executable.
-                    record["source_mode"] = safe_path(home, relative).stat().st_mode & 0o777
+                    original = source_stats[relative]
+                    require(source_identity(safe_path(home, relative).stat()) == source_identity(original),
+                            "source_file_changed_after_copy")
+                    record["source_mode"] = original.st_mode & 0o777
+                    record["source_mtime_ns"] = original.st_mtime_ns
                 manifest["files"][relative] = record
+        require(approved_symlinks(home, plan.get("approved_symlinks", [])) == links, "approved_symlink_changed")
         atomic_json(stage / "manifest.json", manifest)
         encrypt_tree(stage, output, recipient)
     public = {"migration_id": plan["migration_id"], "archive_sha256": checksum(output), "encrypted_bytes": output.stat().st_size,

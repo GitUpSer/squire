@@ -361,6 +361,21 @@ provider timestamps have second precision, while journal times are fractional.
 Reconcile pending source requests preceding that floor as well; a stable local
 journal alone does not prove that WhatsApp backlog collection is complete.
 
+Preserve the founder's existing private provider configuration and credentials;
+the service-funded customer model pool is separate. Remove obsolete transport
+capabilities and channel aliases, not the owner's model or cron overrides.
+
+For the approved existing group, reconcile a separate group-scoped handled-ID
+set. Create its real claim nonce before importing the group binding: the imported
+binding consumes the group allowance. Do this late in the window because the
+nonce expires after ten minutes. Preserve the verified source participation
+policy through the operator import's `group_mode`; public requests cannot bypass
+administrator approval to select all-message mode. After both bindings and
+completion IDs exist, capture may resume while their runtimes are unready.
+Queued ordinary work waits; a valid owner claim can pass that pending backlog,
+but cannot overtake an active processing lease. Complete the genuine claim
+through WhatsApp and provision the group through its normal lifecycle.
+
 After all preflight gates, `fence --execute` records an in-progress journal, preserves
 the exact crontab, replaces it with an inactive marker, and installs persistent
 negative `ConditionPathExists` drop-ins on the source gateway, independent

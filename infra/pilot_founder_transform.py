@@ -260,6 +260,8 @@ def prepare_runtime_config(source,output,expected_checksum,conversation_id,appro
     config["platforms"]={"squire":{"enabled":True,"home_channel":{"platform":"squire","chat_id":conversation_id},"gateway_restart_notification":False,"typing_indicator":False}}
     config["plugins"]={"enabled":["squire-overlay"],"disabled":[]};config["hooks"]={}
     for legacy in ("whatsapp","telegram","discord","slack","signal","webhook"):config.pop(legacy,None)
+    for legacy in list(config):
+        if legacy.startswith(("WHATSAPP_","TELEGRAM_","DISCORD_","SLACK_","SIGNAL_","WEBHOOK_")):config.pop(legacy)
     config.setdefault("skills",{})["external_dirs"]=list(skill_paths)
     config.setdefault("memory",{})["provider"]="hindsight"
     config["group_sessions_per_user"]=False
