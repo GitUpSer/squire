@@ -21,6 +21,8 @@
     }
     handle {
         root * /srv
+        @trial path /trial /trial/
+        rewrite @trial /index.html
         file_server
     }
 }

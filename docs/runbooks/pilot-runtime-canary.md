@@ -10,20 +10,21 @@ operator record. Never store registry credentials or runtime DEKs in this file.
 
 Production project `a97a9074-9f2e-495a-ba19-84594c65acbd`, environment
 `e921611e-edc6-44f6-b538-185da4bd4fa1`. Control API deployment
-`6e011ce4-8298-48c2-a7a3-237bac99dce9` and control worker deployment
-`a4e0fa23-674e-47ff-bd6f-99534e553f86` were independently read back as SUCCESS.
+`dcf1e98a-30d6-4981-b17d-1175b0389ca8` and control worker deployment
+`914d1b24-3a5a-447c-81fc-d1924c8d5832` reached SUCCESS on 2026-11-22 with the verified rc12 image settings.
 Both have the founder image and backup-bucket setting; admission and workers
 were read back disabled by the orchestrator. Private registry pull credentials are installed in both control services and
 canary registry configuration, never tenant environment variables. The table
-below lists rc9 canary candidates; control image settings remain rc7 until the
-founder native lifecycle check passes.
+below lists the rc12 images accepted after both deployed canaries passed startup
+and restart checks. This is image acceptance; model and live WhatsApp delivery
+remain separate gates.
 
 Both images use repository `ghcr.io/gitupser/squire/hermes-tenant-pilot`:
 
 | Variant | Immutable digest | Memory packages |
 | --- | --- | --- |
-| Standard | `sha256:9bb726217f2fd65bf68f64093191e4ad0e91ebe9edf689de2f9c93ce63a90150` | Hindsight 0.9.0 / pg0 0.15.1 |
-| Founder | `sha256:5139a5ad640ced720e35b92b428731c953f4bfa91a6eabb169b4c6ab5671ae6f` | Hindsight 0.5.2 / pg0 0.12.3 |
+| Standard | `sha256:36f7a613c32c883faf0a2ac46de995999cdf10a4dec160d7b83b5edde24a67c2` | Hindsight 0.9.0 / pg0 0.15.1 |
+| Founder | `sha256:89ee116638a88278b938f157c109d39b8783107210842c3973b224f1413a29d2` | Hindsight 0.5.2 / pg0 0.12.3 |
 
 The founder backup bucket is `pilot-founder-dm-backups`, ID
 `6aa8afe8-e842-41ce-a9ee-2f33d331ed8f`. It is reserved for the actual founder
@@ -38,7 +39,7 @@ is safe for initial inspection, but production promotion/restart acceptance
 requires a Squire-only guard preventing that second supervision owner. Patch
 `008-single-gateway-owner.patch` now implements that guard, with an actual-source
 behavior gate that fails on the original source and preserves legacy behavior.
-The rc9 images above contain this guard; standard deployed restart verification
+The rc12 images above contain this guard; standard deployed restart verification
 passed with persisted running intent and exactly one gateway. Merely
 passing `--no-supervise` to the later supervisord gateway does not prevent the
 earlier reconciliation. Record the replacement immutable image if this guard
@@ -105,7 +106,7 @@ canary containing any gateway process.
    ```sh
    HOME=/opt/data HERMES_HOME=/opt/data SQUIRE_VOLUME=/opt/data \
      /opt/hermes/.venv/bin/python /tmp/pilot_runtime_canary.py \
-       --variant standard --expected-image 'ghcr.io/gitupser/squire/hermes-tenant-pilot@sha256:9bb726217f2fd65bf68f64093191e4ad0e91ebe9edf689de2f9c93ce63a90150'
+       --variant standard --expected-image 'ghcr.io/gitupser/squire/hermes-tenant-pilot@sha256:36f7a613c32c883faf0a2ac46de995999cdf10a4dec160d7b83b5edde24a67c2'
    ```
 
    The probe only reads local metadata and health endpoints. It emits no tokens,

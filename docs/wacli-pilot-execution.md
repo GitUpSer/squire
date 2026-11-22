@@ -423,3 +423,109 @@ explicit isolated API/cluster. Normal entrypoint adoption and the native pg0
 restart lifecycle are still separate acceptance checks; the source agent remains
 the live owner. Control provisioning image references remain rc7 until these
 checks are completed; admission, workers, and outbound remain disabled.
+
+### Native database restart defect and rc10 follow-up
+
+The founder's default-image startup exposed a reproducible upstream pg0 defect:
+its saved PostgreSQL PID had been reused by Node in the new container. With no
+postmaster PID file and no listening database, pg0 0.12.3 nevertheless reported
+the database running. The newer pg0 0.15.1 checks health in `info()` but still
+rejects a recycled live PID in `start()`. The earlier standard restart happened
+to pass; it does not exclude this failure. Neither rc9 variant is accepted for
+final provisioning on this evidence.
+
+Commit `2293590a9f0cdf882475ee54ad538d40e1da52ce` adds an API-lifetime startup
+lock and verifies actual PostgreSQL ownership before startup. It archives only
+proven stale `instance.json` metadata after a clean stop, preserves verified
+same-cluster PostgreSQL for API-only recovery, and rejects ambiguous state. It
+does not signal an unrelated PID or alter database, WAL, or postmaster PID
+files. A stale remaining postmaster PID file requires operator inspection.
+Twenty-three focused regressions and the credential-wrapper suite passed;
+independent review also checked 16 configuration cases against both exact
+Hindsight parsers. The image build now tests an actual live-PID collision,
+lock exclusion across exec, preserved database identity and bank contents, and
+successful recall after restart in both variants. rc10 must pass those builds
+and deployed canary checks before promotion.
+
+Two operator configuration issues were also verified and documented in the
+runtime canary runbook: redeploy reused the previous startup snapshot, and an
+explicit Squire entrypoint override bypassed upstream's privilege drop. The
+canary now uses the image's default startup path. Ownership repair touched only
+generated canary files and left their bytes and all promoted source-file hashes
+unchanged. Before the restart defect was reproduced, the native API recalled
+the known source fact with all 15 database fingerprints unchanged. The original
+source agent has not been fenced or modified.
+
+### rc12 accepted images and November 22 verification
+
+Tag `tenant-pilot-v0.4.0-rc12`, commit
+`e699de6af069c4549525e4020f3942167c23e05a`, passed
+[both published image builds](https://github.com/GitUpSer/squire/actions/runs/43823409626),
+[control tests](https://github.com/GitUpSer/squire/actions/runs/43823416216),
+[runtime checks](https://github.com/GitUpSer/squire/actions/runs/43823416317), and
+[pilot acceptance](https://github.com/GitUpSer/squire/actions/runs/43823416119).
+Both actual image builds exercised the live-PID-reuse restart gate. The complete
+overlay/restored-home/pg0 suite passed 190 tests. rc10 was stopped by a unit test
+scanning unrelated protected CI processes; the fixture was isolated without
+weakening production checks. rc11 was stopped by the new helper's missing Git
+executable bit. Both issues are corrected in rc12.
+
+Accepted repository: `ghcr.io/gitupser/squire/hermes-tenant-pilot`.
+
+| Variant | Verified immutable digest | Canary deployment |
+| --- | --- | --- |
+| Standard | `sha256:36f7a613c32c883faf0a2ac46de995999cdf10a4dec160d7b83b5edde24a67c2` | `5ea1aa3f-3b43-44ea-a502-8148b77fbf1b` |
+| Founder | `sha256:89ee116638a88278b938f157c109d39b8783107210842c3973b224f1413a29d2` | `479db86a-debd-45c5-ae7a-8c4c2eb3ef03` |
+
+The standard canary preserved its exact synthetic pending inbox row, profile and
+initialization hashes across a full container restart with persisted running
+gateway intent. Only one gateway started. Exact-event cleanup returned all three
+queues to zero; fresh November 22 health/readiness checks passed.
+
+The founder canary recovered the preserved stale-PID failure automatically,
+then passed another full container restart with a changed PID1 start time and a
+second automatically archived metadata file. The real Hermes client recalled
+the known original fact among 50 results using local BGE384/RRF. All 15 table
+counts and full-row fingerprints, schema, original bank identity/revision, and
+operation queues remained unchanged against the verified restore: 14,324
+memories and zero pending/processing operations. The fresh probe confirmed one
+ready gateway, healthy memory/browser/web services, correct scope and mounted
+storage, tmpfs secret links, and zero runtime queues. No owner credentials,
+model calls or live deliveries were involved. The original source gateway,
+memory daemon and browser were independently checked active on November 22.
+
+The rc12 digests are now selected as `TENANT_IMAGE` and `PILOT_FOUNDER_IMAGE` on
+both control services. Admission, provision worker and pilot worker remain
+disabled. The migration journal now requires a verified 24-hour founder soak
+before the reserved tester flow; fresh website first-contact evidence remains a
+mandatory subsequent gate. This removes the previous circular dependency
+without treating an existing-contact or synthetic send as fresh delivery.
+
+The service-funded Anthropic key in `env.ignore` still returned 401 on November
+22. A replacement and readiness to link the primary WhatsApp phone were
+requested together. The saved tester invitation remains undelivered and valid
+until November 30; it has not consumed a seat. Model-backed runtime acceptance,
+phone linking/capture, final fenced founder import and integration checks, live
+groups/media, rollback/soak, and the fresh-recipient signup test remain required.
+
+Control API deployment `dcf1e98a-30d6-4981-b17d-1175b0389ca8` and control worker
+deployment `914d1b24-3a5a-447c-81fc-d1924c8d5832` reached SUCCESS with the rc12
+image settings. The public pilot app deployment
+`d514b88e-8fb7-4682-8c06-a536e5c54de6` adds internal `/trial` and `/trial/` aliases
+and explains existing-customer sign-in versus private invitation signup. Live
+HTTP checks confirm both aliases and root serve the exact reviewed HTML with
+200/no redirects, `/api/v1/me` remains 401 without authentication, and operator
+and unknown routes remain 404. No email or WhatsApp message was triggered.
+
+The existing `thesquire.co` marketing site is hosted by service
+`3a279bbd-0bc6-4eac-8e65-cee9b90c5139` in project
+`ddbcfda7-e6f6-47a9-87cd-903b6efeb8c6`, environment
+`0923ea14-9a5e-4d87-990b-be31e5bc76ed`. Its prior live HTML/CSS matched the
+repository baseline byte-for-byte. Deployment
+`6b6df147-0743-42cd-bbb9-259e76abd646` adds only a discreet pilot sign-in link;
+live HTML matches the reviewed source and the waitlist remains intact. The
+pre-existing staged patch `a6b229b1-c064-4103-9db5-3cc15b464fde` was not applied
+or discarded. Build contexts contained only public site files, Caddy config and
+Dockerfile; manifest hashes are
+`66c84ca8c04ac6ab619fd23840bba9852da01795697227fb989edf3afd65da49` (pilot) and
+`b1febb92bd48e246e47928481c63b71d97dbb42660ccf211325ca6be8fc9732e` (marketing).
