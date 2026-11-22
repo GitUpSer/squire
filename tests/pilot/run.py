@@ -25,6 +25,7 @@ ARTIFACTS.mkdir(parents=True, exist_ok=True)
 CONTROL_PYTHON = os.environ.get("CONTROL_PYTHON", str(ROOT / "apps/control-api/.venv/bin/python"))
 MESSAGING_PYTHON = os.environ.get("MESSAGING_PYTHON", "/tmp/squire-messaging-venv/bin/python")
 CADDY = os.environ.get("CADDY_BIN", "/tmp/squire-caddy/caddy")
+# Fixed server ports 18740–18744 stay below Linux’s default ephemeral client range.
 PROCESSES, LOGS = [], []
 
 
@@ -67,23 +68,23 @@ def main():
         control = dict(common, DATABASE_URL=DATABASE+"?options="+quote("-csearch_path=pilot_control"),
             INTERNAL_API_TOKEN="operator-integration-test-token", PILOT_ENABLED="true",
             PILOT_ADMISSION_OPEN="true", PILOT_SECRET="integration-only-secret-"+"s"*40,
-            PILOT_WEB_ORIGIN="http://127.0.0.1:58740", PILOT_COOKIE_SECURE="false",
-            CONTROL_API_URL="http://127.0.0.1:58741", CONTROL_API_INTERNAL_URL="http://127.0.0.1:58741",
-            MESSAGING_BASE_URL="http://127.0.0.1:58742", MESSAGING_SERVICE_TOKEN="c"*40,
+            PILOT_WEB_ORIGIN="http://127.0.0.1:18740", PILOT_COOKIE_SECURE="false",
+            CONTROL_API_URL="http://127.0.0.1:18741", CONTROL_API_INTERNAL_URL="http://127.0.0.1:18741",
+            MESSAGING_BASE_URL="http://127.0.0.1:18742", MESSAGING_SERVICE_TOKEN="c"*40,
             CONTROL_MESSAGING_SERVICE_TOKEN="b"*40,
-            RESEND_API_KEY="fixture-email",RESEND_FROM="pilot@fixture.invalid",RESEND_API_URL="http://127.0.0.1:58744",
-            RAILWAY_API_TOKEN="fixture-railway",RAILWAY_GRAPHQL_URL="http://127.0.0.1:58744/graphql",
+            RESEND_API_KEY="fixture-email",RESEND_FROM="pilot@fixture.invalid",RESEND_API_URL="http://127.0.0.1:18744",
+            RAILWAY_API_TOKEN="fixture-railway",RAILWAY_GRAPHQL_URL="http://127.0.0.1:18744/graphql",
             RAILWAY_PROJECT_ID="fixture-project",RAILWAY_ENVIRONMENT_ID="fixture-environment",
-            RAILWAY_PRIVATE_DOMAIN_SUFFIX="pilot.test",TENANT_PORT="58744",
+            RAILWAY_PRIVATE_DOMAIN_SUFFIX="pilot.test",TENANT_PORT="18744",
             RAILWAY_VOLUME_PROBE_DELAY_SECONDS="0",PROVISION_BACKOFF_BASE_SECONDS="1",
             PROVISION_WORKER_ENABLED="true",PROVISION_WORKER_INTERVAL_SECONDS="0.5",PILOT_WORKER_ENABLED="true",
-            LITELLM_BASE_URL="http://127.0.0.1:58744",LITELLM_MASTER_KEY="fixture-master",
-            TELEGRAM_API_BASE_URL="http://127.0.0.1:58744/disabled-telegram")
+            LITELLM_BASE_URL="http://127.0.0.1:18744",LITELLM_MASTER_KEY="fixture-master",
+            TELEGRAM_API_BASE_URL="http://127.0.0.1:18744/disabled-telegram")
         messaging = dict(common, MESSAGING_DATABASE_URL=DATABASE+"?options="+quote("-csearch_path=pilot_messaging"),
             MESSAGING_ENCRYPTION_KEY="e"*40,MESSAGING_HMAC_KEY="h"*40,
             MESSAGING_CONTROL_TOKEN="c"*40,MESSAGING_TRANSPORT_TOKEN="t"*40,MESSAGING_OPERATOR_TOKEN="o"*40,
-            MESSAGING_CONTROL_URL="http://127.0.0.1:58741",MESSAGING_CONTROL_CALLBACK_TOKEN="b"*40,
-            MESSAGING_TRANSPORT_URL="http://127.0.0.1:58744",MESSAGING_TRANSPORT_BROKER_TOKEN="p"*40,
+            MESSAGING_CONTROL_URL="http://127.0.0.1:18741",MESSAGING_CONTROL_CALLBACK_TOKEN="b"*40,
+            MESSAGING_TRANSPORT_URL="http://127.0.0.1:18744",MESSAGING_TRANSPORT_BROKER_TOKEN="p"*40,
             MESSAGING_RUNTIME_HOST_SUFFIX=".pilot.test",MESSAGING_OUTBOUND_ENABLED="true",
             MESSAGING_SEND_SPACING_SECONDS="0.05")
         subprocess.run([MESSAGING_PYTHON,"-c","from messaging.db import migrate; migrate()"],cwd=ROOT,env=messaging,check=True)
@@ -91,17 +92,17 @@ def main():
         caddyfile = Path(fixture)/"Caddyfile"
         caddyfile.write_text(config)
         try:
-            start("fixtures",[CONTROL_PYTHON,"-m","uvicorn","fixtures:app","--host","127.0.0.1","--port","58744","--no-access-log"],common)
-            wait_http("http://127.0.0.1:58744/healthz")
-            start("messaging",[MESSAGING_PYTHON,"-m","uvicorn","messaging.main:app","--host","127.0.0.1","--port","58742","--no-access-log"],messaging)
-            wait_http("http://127.0.0.1:58742/readyz")
-            start("control",[CONTROL_PYTHON,"-m","uvicorn","control_api.main:app","--host","127.0.0.1","--port","58741","--no-access-log"],control)
-            wait_http("http://127.0.0.1:58741/healthz")
+            start("fixtures",[CONTROL_PYTHON,"-m","uvicorn","fixtures:app","--host","127.0.0.1","--port","18744","--no-access-log"],common)
+            wait_http("http://127.0.0.1:18744/healthz")
+            start("messaging",[MESSAGING_PYTHON,"-m","uvicorn","messaging.main:app","--host","127.0.0.1","--port","18742","--no-access-log"],messaging)
+            wait_http("http://127.0.0.1:18742/readyz")
+            start("control",[CONTROL_PYTHON,"-m","uvicorn","control_api.main:app","--host","127.0.0.1","--port","18741","--no-access-log"],control)
+            wait_http("http://127.0.0.1:18741/healthz")
             start("messaging-worker",[MESSAGING_PYTHON,"-m","messaging.worker"],messaging)
-            start("web",[CADDY,"run","--config",str(caddyfile),"--adapter","caddyfile"],dict(common,PORT="58740",CONTROL_API_UPSTREAM="127.0.0.1:58741"))
-            wait_http("http://127.0.0.1:58740")
+            start("web",[CADDY,"run","--config",str(caddyfile),"--adapter","caddyfile"],dict(common,PORT="18740",CONTROL_API_UPSTREAM="127.0.0.1:18741"))
+            wait_http("http://127.0.0.1:18740")
             with httpx.Client(trust_env=False) as client:
-                result=client.post("http://127.0.0.1:58742/v1/operator/provider",
+                result=client.post("http://127.0.0.1:18742/v1/operator/provider",
                     headers={"Authorization":"Bearer "+"o"*40},json={"paused":False})
                 result.raise_for_status()
             browser_env=dict(common,PILOT_TEST_ARTIFACTS=str(ARTIFACTS))

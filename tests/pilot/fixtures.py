@@ -18,8 +18,8 @@ from fastapi import FastAPI, HTTPException, Request
 if os.environ.get("SQUIRE_PILOT_FIXTURE") != "1":
     raise RuntimeError("HTTP fixtures require explicit test mode")
 
-CONTROL = "http://127.0.0.1:58741"
-MESSAGING = "http://127.0.0.1:58742"
+CONTROL = "http://127.0.0.1:18741"
+MESSAGING = "http://127.0.0.1:18742"
 LOCK = threading.RLock()
 STATE = {"emails": [], "sends": [], "services": {}, "volumes": {}, "domains": {},
          "teams": {}, "keys": {}, "buckets": {}, "inbound_count": 0, "sequence": 0, "events": [], "railway_operations": []}

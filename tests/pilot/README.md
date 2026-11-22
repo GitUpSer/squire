@@ -27,7 +27,7 @@ PILOT_TEST_ARTIFACTS=/tmp/squire-pilot-acceptance
 ```
 
 Run `CONTROL_PYTHON tests/pilot/run.py` from the repo root. It owns ports
-58740–58744 and always terminates child processes. It destructively recreates
+18740–18744 and always terminates child processes. It destructively recreates
 only schemas `pilot_control` and `pilot_messaging` in the supplied test database.
 Fixtures use generated temporary local storage. Test credentials are static,
 public values and must never be used in production.

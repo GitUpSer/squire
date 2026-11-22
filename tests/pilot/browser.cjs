@@ -2,7 +2,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || '/tmp/squire-brows
 const fs = require('node:fs/promises');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const web = 'http://127.0.0.1:58740', control = 'http://127.0.0.1:58741', messaging = 'http://127.0.0.1:58742', fixture = 'http://127.0.0.1:58744';
+const web = 'http://127.0.0.1:18740', control = 'http://127.0.0.1:18741', messaging = 'http://127.0.0.1:18742', fixture = 'http://127.0.0.1:18744';
 const output = process.env.PILOT_TEST_ARTIFACTS || '/tmp/squire-pilot-acceptance';
 const checks = [], errors = [];
 const note = name => {checks.push(name); process.stdout.write('PASS '+name+'\n');};
