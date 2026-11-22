@@ -607,3 +607,43 @@ required before founder cutover.
 Admission/workers remain closed. Final founder import and integration checks,
 approved live groups/media, rollback/24-hour soak, and the reserved fresh
 website signup remain outstanding; the tester invitation is still undelivered.
+
+### November 22 rc13 promotion and single-window preparation
+
+Both rc13 builds at `c1b209a` passed CI and registry manifest verification.
+The standard digest is
+`sha256:5da36a0088962e8e965ccc7d326d65c3e350a28db0eca4d336e9c0f29bca5352`;
+the founder digest is
+`sha256:c078f6dd9172868c5e1467540aaabbdf9c95ece714686cc48afb8cb677f92c2e`.
+Canary deployments `abc213f5-b980-4e14-9f9f-a0caabc15619` and
+`70f4ff12-b8e7-4229-a9d7-c3da43306a18` reached SUCCESS. Readiness checks
+confirmed one gateway each, browser/memory health, the expected mounted home,
+and no model credentials. Control API and worker deployments
+`b5533787-03fb-490d-9482-a2d9dd41aae0` and
+`c6f07dcd-7dfa-4715-b05e-2f539366a39e` reached SUCCESS selecting these images;
+admission and workers remain disabled. The installed backup helper matches
+the reviewed source in both images. Its packaged standard-canary execution
+produced sixteen standalone SQLite snapshots and one PostgreSQL archive;
+that count includes synthetic operator-proof stores.
+
+The founder selected one migration window. A distinct empty service and 20 GiB
+volume were prepared on the founder image, with `/bin/sleep infinity` and no
+gateway, credentials or customer data. The owner completed email verification;
+a read-only query confirmed one verified account and an active session, with
+no tenant or admission. The signup page's paused-admission response is the
+intended hold and does not invalidate that sign-in.
+
+An isolated rehearsal exercised the actual migration journal and fence/rollback
+functions against disposable local systemd services. Five persistent guards
+blocked restarts; the replacement stopped before the four previously active
+services restarted; the originally inactive service stayed inactive. Fixture
+SQLite data and crontab were preserved and all fixture units/processes were
+removed. This used the WSL system manager and a private crontab shim, not the
+production user manager. It establishes isolated rollback behavior, not a
+production cutover or rollback.
+
+Provider-shaped disappearing-text and image fixtures exposed a remaining media
+gap: wacli dropped the provider expiry metadata. Expiry propagation and checks
+through capture, queued processing, media access and replies are being repaired.
+The media preflight remains unpassed. No source fence, account binding, live
+customer send or tester contact has occurred.

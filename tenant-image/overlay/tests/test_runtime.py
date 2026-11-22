@@ -8,14 +8,14 @@ from squire_overlay.store import Store,ScopeError,QueueFull
 
 
 def event(scope,identifier="one"):
-    return {"event_id":identifier,"conversation_id":scope.conversation_id,"tenant_id":scope.tenant_id,"runtime_id":scope.runtime_id,"chat_type":scope.kind,"sender_id":"sender-hash","provider_message_id":"provider-"+identifier,"timestamp":12345.0,"payload":{"text":"Hello"}}
+    return {"event_id":identifier,"conversation_id":scope.conversation_id,"tenant_id":scope.tenant_id,"runtime_id":scope.runtime_id,"chat_type":scope.kind,"sender_id":"sender-hash","provider_message_id":"provider-"+identifier,"timestamp":12345.0,"payload":{"text":"Hello","expires_at":None}}
 
 
 def test_commit_dedup_scope_and_conflict(scope):
     store=Store(scope.database);payload=event(scope)
     assert store.accept([payload],scope)==["one"]
     assert Store(scope.database).accept([payload],scope)==["one"]
-    conflicting={**payload,"payload":{"text":"different"}}
+    conflicting={**payload,"payload":{"text":"different","expires_at":None}}
     with pytest.raises(ScopeError):store.accept([conflicting],scope)
     with pytest.raises(ScopeError):store.accept([{**payload,"conversation_id":"other"}],scope)
     assert store.claim()==payload
@@ -36,6 +36,82 @@ def test_batch_rollback_on_one_invalid_scope(scope):
     store=Store(scope.database)
     with pytest.raises(ScopeError):store.accept([event(scope),{**event(scope,"two"),"tenant_id":"different"}],scope)
     assert store.claim() is None
+
+
+@pytest.mark.parametrize("deadline",["missing",True,1.5,"1000",0,-1,253402300800])
+def test_expiry_contract_rejected_before_persisting_batch(scope,deadline):
+    store=Store(scope.database);bad=event(scope,"invalid")
+    if deadline=="missing":bad["payload"].pop("expires_at")
+    else:bad["payload"]["expires_at"]=deadline
+    with pytest.raises(ScopeError):store.accept([event(scope),bad],scope)
+    with store.db() as db:assert db.execute("SELECT count(*) FROM inbox").fetchone()[0]==0
+
+
+def test_queued_reply_expiry_survives_restart_and_prevents_broker_call(scope,monkeypatch):
+    from squire_overlay.client import Broker
+    clock=[1000];monkeypatch.setattr("squire_overlay.store.time.time",lambda:clock[0])
+    store=Store(scope.database)
+    store.enqueue({"response_key":"reply","conversation_id":scope.conversation_id,"text":"private reply","_expires_at":1001})
+    clock[0]=1001;broker=Broker(scope)
+    monkeypatch.setattr(broker,"request",lambda *args,**kwargs:pytest.fail("expired reply reached broker"))
+    assert broker.flush(Store(scope.database))
+    with store.db() as db:assert db.execute("SELECT state FROM outbox").fetchone()[0]=="cancelled"
+
+
+@pytest.mark.parametrize("parent_expiry,scheduled,allowed",[(None,False,True),(999,False,False),("missing",False,False),("absent",False,False),("absent",True,True)])
+def test_legacy_outbox_requires_known_parent_deadline_or_scheduled_origin(scope,monkeypatch,parent_expiry,scheduled,allowed):
+    from squire_overlay.client import Broker
+    monkeypatch.setattr("squire_overlay.store.time.time",lambda:1000)
+    store=Store(scope.database)
+    if parent_expiry!="absent":
+        incoming=event(scope);incoming["payload"]["expires_at"]=parent_expiry if parent_expiry!="missing" else None
+        store.accept([incoming],scope)
+        if parent_expiry=="missing":
+            incoming["payload"].pop("expires_at")
+            with store.db() as db:db.execute("UPDATE inbox SET payload=?",(json.dumps(incoming),))
+    payload={"response_key":"legacy","text":"reply","priority":"scheduled" if scheduled else "interactive"}
+    if not scheduled:payload["cause_event_id"]="one"
+    store.enqueue(payload);broker=Broker(scope);sent=[]
+    monkeypatch.setattr(broker,"request",lambda *args,**kwargs:sent.append(args[2]) or {"operation_id":"accepted"})
+    broker.flush(Store(scope.database))
+    assert bool(sent)==allowed
+
+
+def test_unexpired_reply_does_not_send_internal_expiry_field(scope,monkeypatch):
+    from squire_overlay.client import Broker
+    monkeypatch.setattr("squire_overlay.store.time.time",lambda:1000)
+    store=Store(scope.database);store.enqueue({"response_key":"reply","text":"reply","_expires_at":1001})
+    broker=Broker(scope);sent=[]
+    monkeypatch.setattr(broker,"request",lambda *args,**kwargs:sent.append(args[2]) or {"operation_id":"accepted"})
+    assert broker.flush(store)
+    assert sent==[{"response_key":"reply","text":"reply"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_before_processing",[True,False])
+async def test_actual_adapter_expiry_before_turn_and_during_generation(hermes,scope,monkeypatch,expires_before_processing):
+    from gateway.config import PlatformConfig
+    from squire_overlay.adapter import SquireAdapter
+    clock=[1000];monkeypatch.setattr("squire_overlay.store.time.time",lambda:clock[0])
+    adapter=SquireAdapter(PlatformConfig());seen=[]
+    monkeypatch.setattr(adapter.broker,"flush",lambda store:False)
+    monkeypatch.setattr(adapter.broker,"request",lambda *args,**kwargs:{"approvals":[]})
+    async def handler(message):
+        seen.append(message.text);clock[0]=1001
+        return "Do not send after expiry"
+    adapter.set_message_handler(handler)
+    incoming=event(scope);incoming["payload"]["expires_at"]=1000 if expires_before_processing else 1001
+    adapter.store.accept([incoming],scope)
+    await adapter.connect()
+    try:
+        for _ in range(80):
+            with adapter.store.db() as db:state=db.execute("SELECT state FROM inbox").fetchone()[0]
+            if state not in {"pending","running"}:break
+            await asyncio.sleep(.025)
+        assert seen==([] if expires_before_processing else ["Hello"])
+        assert adapter.store.outbox() is None
+        if expires_before_processing:assert state=="cancelled"
+    finally:await adapter.disconnect()
 
 
 def test_durable_outbound_keys_cannot_change_content(scope):

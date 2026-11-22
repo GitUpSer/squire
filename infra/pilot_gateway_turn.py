@@ -58,7 +58,7 @@ def event():
             "tenant_id": RUNTIME, "runtime_id": RUNTIME, "chat_type": "dm",
             "sender_id": "synthetic-canary", "provider_message_id": EVENT_ID,
             "timestamp": 1000000000.0,
-            "payload": {"text": "This is a synthetic connectivity check. Reply with exactly SQUIRE_CANARY_OK and nothing else. Do not use any tools."}}
+            "payload": {"text": "This is a synthetic connectivity check. Reply with exactly SQUIRE_CANARY_OK and nothing else. Do not use any tools.","expires_at":None}}
 
 
 def safe_file(path):

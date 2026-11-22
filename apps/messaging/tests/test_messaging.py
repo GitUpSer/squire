@@ -44,7 +44,7 @@ def event(sequence=1, text="hello", chat="15550000001@s.whatsapp.net", **kwargs)
         origin=kwargs.pop("origin", "live"),
         provider_message_id=kwargs.pop("provider_message_id", f"provider-{sequence}"),
         chat_jid=chat, sender_jid=kwargs.pop("sender_jid", chat),
-        timestamp=kwargs.pop("timestamp", now()), text=text, **kwargs)
+        timestamp=kwargs.pop("timestamp", now()), expires_at=kwargs.pop("expires_at", None), text=text, **kwargs)
 
 
 def ingest(events, before=None, after="1", store="store"):

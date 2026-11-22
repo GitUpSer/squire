@@ -261,7 +261,7 @@ async def inject(request: Request):
                          "provider_message_id":f"fixture-provider-{seq}","chat_jid":command["chat_jid"],
                          "sender_jid":command.get("sender_jid",command["chat_jid"]),
                          "chat_type":command.get("chat_type","dm"),"origin":"live",
-                         "timestamp":time.time(),"from_me":False,"text":command["text"]}]}
+                         "timestamp":time.time(),"expires_at":None,"from_me":False,"text":command["text"]}]}
             STATE["last_batch"] = batch
             STATE["inbound_count"] += 1
     with httpx.Client(timeout=15, trust_env=False) as client:

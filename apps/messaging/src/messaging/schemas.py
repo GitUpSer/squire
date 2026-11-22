@@ -31,6 +31,7 @@ class Event(StrictModel):
     chat_type: Literal["dm", "group", "other"] = "dm"
     origin: Literal["live", "replay", "history", "unknown"] = "unknown"
     timestamp: float
+    expires_at: int | None = Field(default=None, ge=1, le=253402300799, strict=True)
     from_me: bool = False
     text: str = Field(default="", max_length=32000)
     reply_to: str | None = Field(default=None, max_length=200)
@@ -40,6 +41,12 @@ class Event(StrictModel):
     new_chat_jid: str | None = Field(default=None, max_length=150)
     group: GroupSnapshot | None = None
     media: dict | None = None
+
+    @model_validator(mode="after")
+    def expiry_known(self):
+        if self.kind == "message" and "expires_at" not in self.model_fields_set:
+            raise ValueError("message expiry must be explicitly known")
+        return self
 
 
 class IngestBatch(StrictModel):

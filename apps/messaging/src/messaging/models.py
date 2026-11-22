@@ -119,6 +119,7 @@ class InboxEvent(SQLModel, table=True):
     state: str = Field(default="pending", index=True)
     payload_enc: str | None = Field(default=None, sa_column=Column(Text))
     created_at: float = Field(index=True)
+    expires_at: int | None = Field(default=None, sa_type=BigInteger)
     next_attempt_at: float = 0
     attempts: int = 0
     lease_owner: str | None = None
@@ -155,6 +156,7 @@ class Outbox(SQLModel, table=True):
     binding_id: str | None = Field(default=None, index=True)
     binding_generation: int | None = None
     challenge_id: str | None = None
+    cause_event_id: str | None = Field(default=None, index=True)
     payload_enc: str | None = Field(default=None, sa_column=Column(Text))
     state: str = Field(default="queued", index=True)
     priority: int = 0

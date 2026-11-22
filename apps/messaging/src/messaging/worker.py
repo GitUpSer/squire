@@ -100,6 +100,8 @@ def finish_inbound(claim: Claim, state: str, error: str | None = None) -> None:
         row.state, row.error_code = state, error
         row.next_attempt_at = now() + backoff(row.attempts) if state == "pending" else 0
         row.completed_at = now() if state != "pending" else None
+        if state == "expired":
+            row.payload_enc = None
         if row.binding_id:
             binding = db.get(Binding, row.binding_id)
             if binding and binding.processing_event_id == row.id:
@@ -132,11 +134,19 @@ def dispatch(claim: Claim, client: httpx.Client) -> None:
             row = _claim_row(db, InboxEvent, claim)
             if not row or row.state != "claimed" or not row.payload_enc:
                 return
+            if row.expires_at is not None and row.expires_at <= now():
+                db.commit()
+                finish_inbound(claim, "expired", "message_expired")
+                return
             event = Event.model_validate(open_sealed(row.payload_enc, "inbox:" + row.id))
         snapshot = group_snapshot(client, event) if event.chat_type == "group" else None
         with Session(engine()) as db:
             row = _claim_row(db, InboxEvent, claim)
             if not row or row.state != "claimed":
+                return
+            if row.expires_at is not None and row.expires_at <= now():
+                db.commit()
+                finish_inbound(claim, "expired", "message_expired")
                 return
             if snapshot and handle_command(db, event, snapshot):
                 db.commit()
@@ -164,7 +174,8 @@ def dispatch(claim: Claim, client: httpx.Client) -> None:
                 "sender_id": digest("participant", binding.id + "\0" + event.sender_jid),
                 "provider_message_id": event.provider_message_id, "timestamp": event.timestamp,
                 "payload": {"text": event.text, "reply_to": event.reply_to,
-                            "mentions": event.mentions, "media": event.media}}
+                            "mentions": event.mentions, "media": event.media,
+                            "expires_at": row.expires_at}}
             db.commit()
         # Admission and runtime delivery are both idempotent by the stable event ID.
         admission = client.post(settings().control_url.rstrip("/") + f"/v1/service/tenants/{tenant_id}/admit",
@@ -184,6 +195,11 @@ def dispatch(claim: Claim, client: httpx.Client) -> None:
             tenant = db.get(TenantState, tenant_id)
             if not row or row.state != "claimed" or not binding or not binding.active or not tenant or not eligible(tenant):
                 return
+            if row.expires_at is not None and row.expires_at <= now():
+                db.commit()
+                finish_inbound(claim, "expired", "message_expired")
+                return
+            envelope["payload"]["expires_at"] = row.expires_at
         response = client.post(endpoint, headers={"Authorization": "Bearer " + str(ingress_token)},
                                json={"events": [envelope]}, timeout=20)
         response.raise_for_status()
@@ -231,8 +247,10 @@ def finish_outbound(claim: Claim, state: str, provider_id: str | None = None,
     with Session(engine()) as db:
         row = _claim_row(db, Outbox, claim)
         account = db.get(ProviderAccount, settings().provider_account_id)
-        if not row or row.state not in {"claimed", "dispatching"}:
+        if not row or row.state not in {"claimed", "dispatching", "uncertain"}:
             return
+        if state == "queued" and row.expires_at <= now():
+            state, error = "cancelled", "message_expired"
         row.state, row.error_code = state, error
         row.provider_message_id = provider_id or row.provider_message_id
         row.completed_at = now() if state not in {"queued", "claimed"} else None
@@ -279,7 +297,7 @@ def send(claim: Claim, client: httpx.Client) -> None:
         snapshot = None
         if group_jid:
             synthetic = Event(event_id="send-check", sequence=0, provider_message_id="send-check",
-                              chat_jid=group_jid, chat_type="group", timestamp=now())
+                              chat_jid=group_jid, chat_type="group", timestamp=now(), expires_at=None)
             snapshot = group_snapshot(client, synthetic)
             fresh_snapshot(synthetic, snapshot)
         with Session(engine()) as db:
@@ -291,7 +309,16 @@ def send(claim: Claim, client: httpx.Client) -> None:
                 or account.send_lease_until < now()):
                 return
             tenant = db.get(TenantState, row.tenant_id)
-            if not tenant or not eligible(tenant, setup=bool(row.challenge_id)) or row.expires_at < now() or not row.payload_enc:
+            if row.cause_event_id:
+                parent = db.get(InboxEvent, row.cause_event_id)
+                if (not parent or parent.binding_id != row.binding_id
+                        or parent.state in {"expired", "cancelled"}):
+                    db.commit()
+                    finish_outbound(claim, "cancelled", error="parent_unavailable")
+                    return
+                if parent.expires_at is not None:
+                    row.expires_at = min(row.expires_at, parent.expires_at)
+            if not tenant or not eligible(tenant, setup=bool(row.challenge_id)) or row.expires_at <= now() or not row.payload_enc:
                 db.commit()
                 finish_outbound(claim, "cancelled", error="entitlement_or_expiry")
                 return
@@ -318,7 +345,8 @@ def send(claim: Claim, client: httpx.Client) -> None:
             payload = open_sealed(row.payload_enc, "outbox:" + row.id)
             outgoing = {"operation_id": row.id, "provider_account_id": account.id,
                 "generation": account.generation, "recipient": recipient, "kind": "text",
-                "text": payload["text"], "reply_to": payload.get("reply_to")}
+                "text": payload["text"], "reply_to": payload.get("reply_to"),
+                "expires_at": int(row.expires_at)}
             if payload.get("media"):
                 outgoing.update(kind="media", media=payload["media"])
             # Commit intent before network. A crash after this point becomes
@@ -394,10 +422,25 @@ def retain() -> None:
         for model in (InboxEvent, Outbox):
             rows = db.exec(select(model).where(model.payload_enc.is_not(None),
                 or_(and_(model.completed_at.is_not(None), model.completed_at < cutoff),
-                    model.created_at < dead)).with_for_update(skip_locked=True)).all()
+                    model.created_at < dead,
+                    and_(model.expires_at.is_not(None), model.expires_at <= now()))).with_for_update(skip_locked=True)).all()
             for row in rows:
                 row.payload_enc = None
-                if row.state in {"queued", "claimed", "dispatching", "pending"}:
+                if model is Outbox and row.state == "dispatching":
+                    # Keep the in-flight lease: a matching response may still
+                    # establish acceptance; expiry cannot prove it was unsent.
+                    row.state, row.completed_at, row.error_code = "uncertain", now(), "payload_expired_during_send"
+                elif row.state in {"queued", "claimed", "pending"}:
+                    if model is Outbox and row.state == "claimed":
+                        account = db.get(ProviderAccount, settings().provider_account_id)
+                        if account and account.send_owner == row.lease_owner:
+                            account.send_owner, account.send_lease_until = None, 0
+                            db.add(account)
+                    if model is InboxEvent and row.binding_id:
+                        binding = db.get(Binding, row.binding_id)
+                        if binding and binding.processing_event_id == row.id:
+                            binding.processing_event_id, binding.processing_lease_until = None, 0
+                            db.add(binding)
                     row.state, row.completed_at, row.error_code = "expired", now(), "payload_retention_expired"
                 db.add(row)
         for row in db.exec(select(ShareApproval).where(ShareApproval.expires_at < now(),

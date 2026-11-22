@@ -11,6 +11,9 @@ from pathlib import Path
 class ScopeError(ValueError): pass
 class QueueFull(RuntimeError): pass
 
+def expired(deadline):
+    return deadline is not None and time.time() >= deadline
+
 class Store:
     def __init__(self,path):
         self.path=Path(path); self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -60,7 +63,9 @@ class Store:
                 if isinstance(timestamp,bool) or not isinstance(timestamp,(float,int)) or not math.isfinite(timestamp) or not 0<=timestamp<=253402300799:
                     raise ScopeError("invalid event timestamp")
                 payload=event["payload"]
-                if not isinstance(payload,dict) or set(payload)-{"text","reply_to","mentions","media"}: raise ScopeError("invalid event payload")
+                if not isinstance(payload,dict) or "expires_at" not in payload or set(payload)-{"text","reply_to","mentions","media","expires_at"}: raise ScopeError("invalid event payload")
+                deadline=payload["expires_at"]
+                if deadline is not None and (type(deadline) is not int or not 1<=deadline<=253402300799):raise ScopeError("invalid event expiry")
                 if not isinstance(payload.get("text",""),str) or len(payload.get("text",""))>32000: raise ScopeError("invalid text")
                 if payload.get("reply_to") is not None and (not isinstance(payload["reply_to"],str) or len(payload["reply_to"])>200):raise ScopeError("invalid reply identity")
                 if "mentions" in payload and (not isinstance(payload["mentions"],list) or len(payload["mentions"])>100 or any(not isinstance(item,str) or len(item)>200 for item in payload["mentions"])):raise ScopeError("invalid mentions")
@@ -104,6 +109,11 @@ class Store:
 
     def cancel(self,event_id):
         with self.db() as db:db.execute("UPDATE inbox SET state='cancelled',finished=? WHERE event_id=?",(time.time(),event_id))
+
+    def event_expiry(self,event_id):
+        with self.db() as db:
+            row=db.execute("SELECT payload FROM inbox WHERE event_id=?",(event_id,)).fetchone()
+            return json.loads(row[0])["payload"].get("expires_at",0) if row else 0
 
     def defer(self,event_id):
         with self.db() as db:db.execute("UPDATE inbox SET state='pending',started=NULL WHERE event_id=? AND state='running'",(event_id,))

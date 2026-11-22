@@ -146,7 +146,7 @@ def test_env_metadata_exception_requires_sealed_tmpfs_symlink(scope,generated_po
 def test_real_broker_flush_records_receipt_without_delivery(scope,sink):
     base,journal=sink
     actual=RuntimeConfig.from_env();store=Store(actual.database)
-    store.enqueue(outbound())
+    store.enqueue(outbound(_expires_at=None))
     assert Broker(actual).flush(store)
     with store.db() as db:
         row=db.execute("SELECT state,operation_id FROM outbox").fetchone()

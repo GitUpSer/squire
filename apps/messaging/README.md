@@ -7,7 +7,7 @@ production concurrency.
 
 Build both Dockerfiles from the repository root. Run `squire-messaging-migrate`
 once as a release command before starting API or worker. The migration acquires
-a PostgreSQL advisory transaction lock and installs versioned revision 1. API
+a PostgreSQL advisory transaction lock and installs versioned revision 2. API
 startup verifies the revision and does not silently migrate it. Both processes
 must use the same keys, database, provider identity and service URLs.
 
@@ -82,6 +82,10 @@ message/send and live metadata roundtrip, not an unsolicited membership webhook.
 
 Completed message payloads expire after 24 hours, pending/dead payloads after
 seven days; challenge/claim material expires after its TTL plus 24 hours.
+Disappearing messages carry a trusted absolute `expires_at` in Unix seconds;
+explicit null means confirmed ordinary. Their earlier deadline blocks dispatch,
+media access and parent-linked replies, and the existing retention worker removes
+expired live payloads. Outbound deadlines also reach the provider broker.
 Private approval results expire at their ten-minute TTL. Deliberate tenant
 deletion erases live payloads and credentials immediately, retaining minimal
 HMAC/idempotency/consent metadata. Database backup retention is an infrastructure

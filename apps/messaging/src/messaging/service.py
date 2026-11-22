@@ -110,15 +110,21 @@ def queue_capacity(db: Session, tenant_id: str) -> None:
 def queue_text(db: Session, *, tenant_id: str, response_key: str, text: str,
                binding: Binding | None = None, challenge_id: str | None = None,
                runtime_id: str | None = None, reply_to: str | None = None,
-               priority: int = 0, ttl: float = 86400, media: dict | None = None) -> Outbox:
+               priority: int = 0, ttl: float = 86400, media: dict | None = None,
+               cause_event_id: str | None = None, expires_at: int | None = None) -> Outbox:
     key = digest("response", tenant_id + "\0" + response_key)
     payload = {"text": text, "reply_to": reply_to}
     if media is not None:
         payload["media"] = media
     existing = db.exec(select(Outbox).where(Outbox.response_key == key)).first()
     if existing:
+        if existing.cause_event_id != cause_event_id:
+            raise HTTPException(409, "response key reused with different cause")
         if existing.payload_enc and open_sealed(existing.payload_enc, "outbox:" + existing.id) != payload:
             raise HTTPException(409, "response key reused with different content")
+        if expires_at is not None:
+            existing.expires_at = min(existing.expires_at, expires_at)
+            db.add(existing)
         return existing
     queue_capacity(db, tenant_id)
     if media is not None:
@@ -134,7 +140,8 @@ def queue_text(db: Session, *, tenant_id: str, response_key: str, text: str,
                  binding_id=binding.id if binding else None,
                  binding_generation=binding.generation if binding else None,
                  challenge_id=challenge_id, payload_enc=seal(payload, "outbox:" + oid),
-                 priority=priority, created_at=now(), expires_at=now() + ttl)
+                 priority=priority, created_at=now(), cause_event_id=cause_event_id,
+                 expires_at=min(now() + ttl, expires_at) if expires_at is not None else now() + ttl)
     db.add(row)
     db.flush()
     return row
@@ -390,12 +397,16 @@ def enqueue_runtime(db: Session, runtime: Runtime, req: OutboundRequest) -> dict
     if (req.conversation_id != runtime.binding_id or not runtime.active or not binding
         or not binding.active or not eligible(tenant)):
         raise HTTPException(403, "outbound scope unavailable")
+    event = None
+    if req.cause_event_id:
+        event = db.get(InboxEvent, req.cause_event_id)
+        if not event or event.binding_id != binding.id or event.tenant_id != runtime.tenant_id:
+            raise HTTPException(403, "response event scope mismatch")
+        if event.state in {"expired", "cancelled"} or (event.expires_at is not None and event.expires_at <= now()):
+            raise HTTPException(410, "response event expired or revoked")
     outbox = queue_text(db, tenant_id=runtime.tenant_id, runtime_id=runtime.id,
         response_key=runtime.id + ":" + req.response_key, text=req.text, binding=binding,
         reply_to=req.reply_to, priority=1 if req.priority == "scheduled" else 0,
-        media=req.media.model_dump() if req.media else None)
-    if req.cause_event_id:
-        event = db.get(InboxEvent, req.cause_event_id)
-        if not event or event.binding_id != binding.id:
-            raise HTTPException(403, "response event scope mismatch")
+        media=req.media.model_dump() if req.media else None, cause_event_id=req.cause_event_id,
+        expires_at=event.expires_at if event else None)
     return {"operation_id": outbox.id, "status": outbox.state}

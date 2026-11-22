@@ -135,8 +135,19 @@ def accept_batch(db: Session, batch: IngestBatch) -> dict:
         if existing:
             # Upserts can reflect edits/current-state repair; never create a new
             # agent turn. Only an undelivered event can change its queued content.
-            if existing.state == "pending" and event.kind == "message":
-                existing.payload_enc = seal(event.model_dump(), "inbox:" + existing.id)
+            if event.kind == "message":
+                deadlines = [x for x in (existing.expires_at, event.expires_at) if x is not None]
+                existing.expires_at = min(deadlines) if deadlines else None
+                if existing.expires_at is not None and existing.expires_at <= now():
+                    existing.payload_enc = None
+                    if existing.state in {"pending", "claimed"}:
+                        existing.state, existing.completed_at = "expired", now()
+                elif existing.state == "pending":
+                    existing.payload_enc = seal(event.model_copy(update={"expires_at": existing.expires_at}).model_dump(), "inbox:" + existing.id)
+                if existing.expires_at is not None:
+                    for reply in db.exec(select(Outbox).where(Outbox.cause_event_id == existing.id)):
+                        reply.expires_at = min(reply.expires_at, existing.expires_at)
+                        db.add(reply)
                 db.add(existing)
         else:
             eid = identifier()
@@ -149,9 +160,16 @@ def accept_batch(db: Session, batch: IngestBatch) -> dict:
                 target = db.exec(select(InboxEvent).where(InboxEvent.logical_key == target_key)).first()
                 if target:
                     target.payload_enc = None
-                    if target.state in {"pending", "claimed"}:
-                        target.state, target.completed_at = "cancelled", now()
+                    target.state, target.completed_at = "cancelled", now()
+                    for reply in db.exec(select(Outbox).where(Outbox.cause_event_id == target.id)):
+                        reply.expires_at = min(reply.expires_at, now())
+                        db.add(reply)
                     db.add(target)
+            elif event.kind == "message" and db.exec(select(InboxEvent.id).where(
+                    InboxEvent.logical_key == _event_key(event.model_copy(update={"kind": "delete"}), binding))).first():
+                state = "cancelled"
+            elif event.kind == "message" and event.expires_at is not None and event.expires_at <= now():
+                state = "expired"
             elif event.kind == "message" and not event.from_me and event.origin in {"live", "replay"}:
                 text = event.text.strip()
                 if event.chat_type == "dm" and text.upper() == "STOP":
@@ -193,7 +211,8 @@ def accept_batch(db: Session, batch: IngestBatch) -> dict:
                 provider_message_id=event.provider_message_id, binding_id=binding.id if binding else None,
                 tenant_id=binding.tenant_id if binding else command_tenant, kind=event.kind, state=state,
                 payload_enc=seal(payload, "inbox:" + eid) if payload else None, created_at=now(),
-                completed_at=now() if state == "ignored" else None)
+                expires_at=event.expires_at,
+                completed_at=now() if state in {"ignored", "expired", "cancelled"} else None)
             db.add(row)
             accepted += 1
         db.add(Observation(id=identifier(), store_id=batch.store_id, sequence=event.sequence,

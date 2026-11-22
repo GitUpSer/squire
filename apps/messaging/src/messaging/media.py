@@ -43,10 +43,11 @@ def authorized_event(db, runtime_id, event_id):
             or binding.runtime_id != runtime.id or not tenant or not eligible(tenant)
             or not row or row.binding_id != binding.id or row.tenant_id != runtime.tenant_id
             or row.kind != "message" or row.state not in {"pending", "claimed", "done"}
+            or (row.expires_at is not None and row.expires_at <= now())
             or not row.payload_enc):
         raise HTTPException(404, "attachment unavailable")
     payload = open_sealed(row.payload_enc, "inbox:" + row.id)
-    if (not payload.get("media") or payload.get("from_me")
+    if ("expires_at" not in payload or not payload.get("media") or payload.get("from_me")
             or payload.get("origin") not in {"live", "replay"}
             or payload.get("timestamp", 0) < binding.activated_at
             or min(row.created_at, payload.get("timestamp", 0)) + MAX_AGE_SECONDS < now()):

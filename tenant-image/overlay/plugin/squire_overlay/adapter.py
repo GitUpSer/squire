@@ -11,7 +11,7 @@ from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from .config import RuntimeConfig
-from .store import Store
+from .store import Store,expired
 from .client import Broker
 
 _current_event=contextvars.ContextVar("squire_event",default=None)
@@ -44,11 +44,14 @@ class SquireAdapter(BasePlatformAdapter):
     async def connect(self,*,is_reconnect=False):
         if self._running:return True
         self._running=True
+        from .media import cleanup
+        await asyncio.to_thread(cleanup,self.scope)
         self._model_ready=await asyncio.to_thread(model_configured,self.scope)
         for event_id in self.store.recover():
-            self.store.enqueue({"conversation_id":self.scope.conversation_id,"response_key":"recovery:"+event_id,"text":"My last task was interrupted and may have taken an action. I have paused queued work so I don’t repeat it. Please ask the pilot operator to reconcile this task before continuing.","priority":"interactive","cause_event_id":event_id})
+            deadline=self.store.event_expiry(event_id)
+            if not expired(deadline):self.store.enqueue({"conversation_id":self.scope.conversation_id,"response_key":"recovery:"+event_id,"text":"My last task was interrupted and may have taken an action. I have paused queued work so I don’t repeat it. Please ask the pilot operator to reconcile this task before continuing.","priority":"interactive","cause_event_id":event_id,"_expires_at":deadline})
         self.store.mark_runtime(self.scope.generation,True,self._model_ready)
-        self._tasks=[asyncio.create_task(self._inbox_loop()),asyncio.create_task(self._outbox_loop())]
+        self._tasks=[asyncio.create_task(self._inbox_loop()),asyncio.create_task(self._outbox_loop()),asyncio.create_task(self._media_cleanup_loop())]
         if self.scope.kind=="dm":self._tasks.append(asyncio.create_task(self._approvals_loop()))
         return True
 
@@ -65,6 +68,8 @@ class SquireAdapter(BasePlatformAdapter):
                 await asyncio.sleep(1);continue
             envelope=self.store.claim()
             if not envelope:await asyncio.sleep(.25);continue
+            if expired(envelope["payload"].get("expires_at",0)):
+                self.store.cancel(envelope["event_id"]);continue
             if envelope["event_id"].startswith("approval:"):
                 try:
                     authorized=await asyncio.to_thread(self.broker.request,"GET","/v1/approvals",timeout=3)
@@ -77,6 +82,7 @@ class SquireAdapter(BasePlatformAdapter):
             text=payload.get("text","")
             if self.scope.kind=="group" and text.lstrip().lower().startswith("!squire "):text=text.lstrip()[8:]
             event=MessageEvent(text=text,source=source,user_id=envelope["sender_id"],message_id=envelope["event_id"],reply_to_message_id=payload.get("reply_to"),timestamp=datetime.fromtimestamp(envelope["timestamp"],timezone.utc),metadata={"squire_event_id":envelope["event_id"],"squire_provider_message_id":envelope["provider_message_id"]},allow_gateway_control=self.scope.kind=="dm")
+            event.metadata["squire_expires_at"]=payload["expires_at"]
             if envelope["event_id"].startswith("approval:"):event.metadata["squire_approval_id"]=envelope["event_id"][9:]
             token=_current_event.set(event);self._completion=asyncio.Event()
             try:
@@ -90,6 +96,8 @@ class SquireAdapter(BasePlatformAdapter):
                             self.store.defer(envelope["event_id"]);await asyncio.sleep(3);continue
                         await self.send(source.chat_id,"I couldn’t retrieve that attachment. Please resend it; the pilot accepts files up to 10 MB and retrieves them within 24 hours.")
                         self.store.finish(envelope["event_id"],True);continue
+                if expired(payload["expires_at"]):
+                    self.store.cancel(envelope["event_id"]);continue
                 await self.handle_message(event)
                 if not event._gateway_accepted:
                     self.store.finish(envelope["event_id"],False)
@@ -117,8 +125,11 @@ class SquireAdapter(BasePlatformAdapter):
                     return command in {"/approve","/deny","/stop","/cancel"} or clarify
                 control=self.store.claim_control(is_control)
                 if control:
+                    if expired(control["payload"].get("expires_at",0)):
+                        self.store.cancel(control["event_id"]);continue
                     source=self.build_source(chat_id=self.scope.conversation_id,chat_type="dm",user_id=control["sender_id"],message_id=control["provider_message_id"])
                     reply=MessageEvent(text=control["payload"].get("text",""),source=source,message_id=control["event_id"],metadata={"squire_event_id":control["event_id"],"squire_provider_message_id":control["provider_message_id"]})
+                    reply.metadata["squire_expires_at"]=control["payload"]["expires_at"]
                     token=_current_event.set(reply)
                     try:
                         await self.handle_message(reply)
@@ -138,12 +149,18 @@ class SquireAdapter(BasePlatformAdapter):
             await asyncio.to_thread(self.broker.flush,self.store)
             await asyncio.sleep(.5)
 
+    async def _media_cleanup_loop(self):
+        from .media import cleanup
+        while self._running:
+            await asyncio.to_thread(cleanup,self.scope)
+            await asyncio.sleep(.5)
+
     async def _approvals_loop(self):
         while self._running:
             try:
                 response=await asyncio.to_thread(self.broker.request,"GET","/v1/approvals")
                 for approval in response.get("approvals",[]):
-                    event={"event_id":"approval:"+approval["approval_id"],"conversation_id":self.scope.conversation_id,"tenant_id":self.scope.tenant_id,"runtime_id":self.scope.runtime_id,"chat_type":"dm","sender_id":"owner-approved-request","provider_message_id":approval["approval_id"],"timestamp":float(approval["expires_at"])-600,"payload":{"text":"The owner explicitly approved this group-requested private action. Perform only the approved action and report the result privately; do not share anything with the group. Approved request: "+approval["summary"]}}
+                    event={"event_id":"approval:"+approval["approval_id"],"conversation_id":self.scope.conversation_id,"tenant_id":self.scope.tenant_id,"runtime_id":self.scope.runtime_id,"chat_type":"dm","sender_id":"owner-approved-request","provider_message_id":approval["approval_id"],"timestamp":float(approval["expires_at"])-600,"payload":{"text":"The owner explicitly approved this group-requested private action. Perform only the approved action and report the result privately; do not share anything with the group. Approved request: "+approval["summary"],"expires_at":int(approval["expires_at"])}}
                     self.store.accept([event],self.scope)
             except Exception:pass  # Dependency unavailable: retain state, never invent approval.
             await asyncio.sleep(15)
@@ -152,6 +169,8 @@ class SquireAdapter(BasePlatformAdapter):
         if str(chat_id)!=self.scope.conversation_id:return SendResult(success=False,error="destination outside runtime scope",error_kind="forbidden")
         if not content and not _media:return SendResult(success=True,message_id="empty")
         event=_current_event.get();event_id=event.metadata.get("squire_event_id") if event else None
+        deadline=event.metadata.get("squire_expires_at",0) if event else None
+        if expired(deadline):return SendResult(success=False,error="source message expired",error_kind="expired")
         if event_id:
             ordinal=self._send_counts.get(event_id,0);self._send_counts[event_id]=ordinal+1
             key="event:"+event_id+":"+str(ordinal)
@@ -169,6 +188,7 @@ class SquireAdapter(BasePlatformAdapter):
                     import uuid
                     key="adhoc:"+str(uuid.uuid4())
         payload={"conversation_id":self.scope.conversation_id,"response_key":key,"text":str(content)[:32000],"priority":"interactive" if event_id else "scheduled"}
+        if event:payload["_expires_at"]=deadline
         if _media:payload["media"]=_media
         if event_id and not event_id.startswith("approval:"):payload["cause_event_id"]=event_id
         if event and event.metadata.get("squire_approval_id") and _final_send.get() and not _media:payload["_approval_id"]=event.metadata["squire_approval_id"]

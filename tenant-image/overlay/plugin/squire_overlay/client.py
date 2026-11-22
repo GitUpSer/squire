@@ -5,6 +5,7 @@ import time
 import urllib.parse
 import urllib.error
 import urllib.request
+from .store import expired
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
@@ -48,6 +49,13 @@ class Broker:
         row=store.outbox()
         if not row:return False
         payload=json.loads(row["payload"])
+        if "_expires_at" in payload:deadline=payload.pop("_expires_at")
+        elif payload.get("cause_event_id"):deadline=store.event_expiry(payload["cause_event_id"])
+        elif payload.get("priority")=="scheduled":deadline=None
+        else:deadline=0  # Legacy unclassified replies have no trustworthy expiry.
+        if expired(deadline):
+            store.outbox_result(row["response_key"],terminal=True)
+            return True
         try:
             approval=payload.pop("_approval_id",None)
             if approval:
