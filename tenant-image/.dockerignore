@@ -10,6 +10,8 @@
 !browser/smoke.py
 !hindsight/
 !hindsight/smoke.py
+!stt/
+!stt/smoke.py
 !bin/
 !bin/**
 !home-template/
